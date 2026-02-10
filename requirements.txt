@@ -1,0 +1,11 @@
+openai
+zhipuai
+groq
+beautifulsoup4
+ebooklib
+httpx
+PyJWT
+tqdm
+pydantic
+lxml
+requests
