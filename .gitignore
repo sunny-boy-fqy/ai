@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+python_venv/
+venv/
+
+# Local configuration files (Private)
+config/
+base_path.config
+config.json
+url.config
+*.api*
+freechat/
+groq/
+longcat/
+nvidia/
+zhipuai/
+
+# Editor files
+.env
+.vscode/
