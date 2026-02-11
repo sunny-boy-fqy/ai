@@ -1,63 +1,57 @@
 #!/bin/bash
 
-# Script to update and push private configuration to a GitHub repository.
+# Update Private Configuration Script
+# This script helps sync your PRIVATE configuration (keys, history) to a separate private repository.
+# It does NOT touch the main AI tool repository.
 
 CONFIG_DIR="$HOME/.config/ai"
-URL_CONFIG="$CONFIG_DIR/url.config"
-REMOTE_REPO_URL="git@github.com:sunny-boy-fqy/ai-config.git" # Default for private config
+URL_CONFIG="$CONFIG_DIR/repo_url.config"
 
-# Ensure the configuration directory exists
-mkdir -p "$CONFIG_DIR"
+echo "=== 🔒 Private Config Sync ==="
 
-# Check if URL config file exists, if not, prompt user and save it
+if [ ! -d "$CONFIG_DIR" ]; then
+    echo "❌ Config directory $CONFIG_DIR does not exist. Run 'ai new' first."
+    exit 1
+fi
+
+cd "$CONFIG_DIR" || exit
+
+# Check if git is initialized
+if [ ! -d ".git" ]; then
+    echo "Initializing private config repository..."
+    git init
+    echo ".python_venv/" >> .gitignore
+    echo "__pycache__/" >> .gitignore
+    echo "*.log" >> .gitignore
+    git add .gitignore
+    git commit -m "Initialize private config repo"
+fi
+
+# Check for remote URL
 if [ ! -f "$URL_CONFIG" ]; then
-    echo "Configuration URL not found."
-    read -p "Enter the GitHub repository URL for your private config (e.g., git@github.com:user/repo.git or https://...): " user_url
-    if [ -z "$user_url" ]; then
-        echo "No URL provided. Using default: $REMOTE_REPO_URL"
-        echo "$REMOTE_REPO_URL" > "$URL_CONFIG"
+    echo "No remote repository configured for backup."
+    read -p "Enter private Git URL (e.g., git@github.com:user/private-ai-config.git): " REMOTE_URL
+    if [ -z "$REMOTE_URL" ]; then
+        echo "Skipping remote configuration."
     else
-        echo "$user_url" > "$URL_CONFIG"
-        echo "Repository URL saved to $URL_CONFIG"
+        echo "$REMOTE_URL" > "$URL_CONFIG"
+        git remote add origin "$REMOTE_URL"
+    fi
+else
+    REMOTE_URL=$(cat "$URL_CONFIG")
+    if ! git remote | grep -q origin; then
+        git remote add origin "$REMOTE_URL"
     fi
 fi
 
-# Read the URL from the config file
-REPO_URL=$(cat "$URL_CONFIG")
-
-# Ensure the config directory is a Git repository
-if [ ! -d "$CONFIG_DIR/.git" ]; then
-    echo "Initializing Git repository in $CONFIG_DIR..."
-    cd "$CONFIG_DIR" || exit
-    git init
-    git config user.name "fangqiyu" # Setting identity for the config repo
-    git config user.email "fangqiyu@example.com" # Setting identity for the config repo
-    git add .
-    git commit -m "Initial commit for private AI configuration"
-    echo "Git repository initialized."
-else
-    cd "$CONFIG_DIR" || exit
-fi
-
-# Add remote origin if it doesn't exist
-if ! git remote | grep -q origin; then
-    echo "Adding remote origin: $REPO_URL"
-    git remote add origin "$REPO_URL"
-else
-    # Optionally update remote if it exists but URL is different
-    # For now, we assume the user wants to use the stored URL
-    echo "Remote origin already exists. Using: $(git remote get-url origin)"
-fi
-
-# Add any new or modified files
+# Sync
+echo "Syncing configuration..."
 git add .
+git commit -m "Auto-update config: $(date)"
 
-# Commit changes
-echo "Committing changes..."
-git commit -m "Update private AI configuration"
+if [ -n "$REMOTE_URL" ]; then
+    echo "Pushing to $REMOTE_URL..."
+    git push -u origin main || git push -u origin master
+fi
 
-# Push to the remote repository
-echo "Pushing changes to $REPO_URL..."
-git push origin main # Assuming the default branch is master, might need to adjust if it's main
-echo "Push complete."
-
+echo "✅ Configuration synced."

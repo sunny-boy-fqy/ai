@@ -1,69 +1,81 @@
 #!/bin/bash
 
-# AI Tool Installation & Deployment Script
+# AI Tool Installation Script
 
-GITHUB_REPO="git@github.com:sunny-boy-fqy/ai.git"
+REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 CONFIG_DIR="$HOME/.config/ai"
-
-echo "=== 🤖 AI Tool Deployment ==="
-
-# 1. Select Installation Directory
-read -p "Enter installation directory [default: $HOME/ai]: " INSTALL_DIR
-INSTALL_DIR=${INSTALL_DIR:-$HOME/ai}
-
-# Expand ~ if used
-INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-
-# 2. Clone or Sync Repository
-if [ -d "$INSTALL_DIR/.git" ]; then
-    echo "Updating existing repository at $INSTALL_DIR..."
-    cd "$INSTALL_DIR" && git pull origin main
-else
-    echo "Cloning tool to $INSTALL_DIR..."
-    git clone "$GITHUB_REPO" "$INSTALL_DIR"
-    cd "$INSTALL_DIR" || exit
-fi
-
-# 3. Setup Configuration Directory
-echo "Ensuring config directory exists: $CONFIG_DIR"
-mkdir -p "$CONFIG_DIR"
-
-# 4. Create base_path.config
-echo "Configuring base path..."
-echo "$INSTALL_DIR" > "$CONFIG_DIR/base_path.config"
-
-# 5. Setup Python Virtual Environment
+USER_AI_DIR="$HOME/.ai"
+MCP_SERVERS_DIR="$USER_AI_DIR/mcp_servers"
 VENV_PATH="$CONFIG_DIR/python_venv"
+
+echo "=== 🤖 AI CLI Installation ==="
+
+# 1. Directory Setup
+echo "Creating directories..."
+mkdir -p "$CONFIG_DIR"
+mkdir -p "$MCP_SERVERS_DIR"
+
+# 2. Base Path Config
+echo "$REPO_DIR" > "$CONFIG_DIR/base_path.config"
+
+# 3. Virtual Environment
 if [ ! -d "$VENV_PATH" ]; then
-    echo "Creating virtual environment in $VENV_PATH..."
+    echo "Creating virtual environment..."
     python3 -m venv "$VENV_PATH"
 fi
 
-# 6. Install/Update Dependencies
-echo "Installing dependencies..."
+# 4. Install Dependencies
+echo "Installing Python dependencies..."
+# Update pip first
 "$VENV_PATH/bin/pip" install --upgrade pip
-if [ -f "$INSTALL_DIR/requirements.txt" ]; then
-    "$VENV_PATH/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
-else
-    "$VENV_PATH/bin/pip" install openai zhipuai groq beautifulsoup4 ebooklib httpx PyJWT tqdm pydantic lxml requests
-fi
+# Install required packages
+"$VENV_PATH/bin/pip" install openai zhipuai groq beautifulsoup4 ebooklib httpx PyJWT tqdm pydantic lxml requests mcp ddgs duckduckgo_search
 
-# 7. Setup .bashrc Alias
+# 5. MCP Configuration
+echo "Configuring MCP..."
+
+# Copy built-in servers to user directory if they don't exist
+if [ -f "$REPO_DIR/mcp_servers/web_search_server.py" ]; then
+    cp "$REPO_DIR/mcp_servers/web_search_server.py" "$MCP_SERVERS_DIR/"
+fi
+# Note: Since we moved files in the previous step manually, this might fail if the repo is clean.
+# But for a fresh install from git, the files would be in the repo.
+# For now, let's assume the user has the repo.
+
+# Generate mcp_config.json
+MCP_CONFIG_PATH="$CONFIG_DIR/mcp_config.json"
+cat > "$MCP_CONFIG_PATH" <<EOF
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "type": "stdio"
+    },
+    "web-search": {
+      "command": "$VENV_PATH/bin/python3",
+      "args": ["$MCP_SERVERS_DIR/web_search_server.py"],
+      "type": "stdio"
+    }
+  }
+}
+EOF
+echo "Generated MCP config at $MCP_CONFIG_PATH"
+
+# 6. Alias Setup
 BASHRC="$HOME/.bashrc"
-AI_RUN_SCRIPT="$INSTALL_DIR/ai_run.sh"
+AI_RUN_SCRIPT="$REPO_DIR/ai_run.sh"
 ALIAS_LINE="alias ai='$AI_RUN_SCRIPT'"
 
 if grep -q "alias ai=" "$BASHRC"; then
     sed -i "s|alias ai=.*|$ALIAS_LINE|" "$BASHRC"
-    echo "Updated 'ai' alias in .bashrc"
 else
-    echo -e "
-# AI Shortcut
-$ALIAS_LINE" >> "$BASHRC"
-    echo "Added 'ai' alias to .bashrc"
+    echo -e "\n# AI Shortcut\n$ALIAS_LINE" >> "$BASHRC"
 fi
 
-echo -e "
-✅ Deployment Successful!"
+# 7. Permission Fix
+chmod +x "$AI_RUN_SCRIPT"
+
+echo -e "\n✅ Installation Complete!"
 echo "Please run: source ~/.bashrc"
-echo "Then use 'ai' to start."
+echo "Usage: ai 'help'"

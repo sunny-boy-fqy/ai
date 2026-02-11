@@ -26,4 +26,25 @@ A simple command-line interface for interacting with various AI providers (OpenA
 - `ai_caller.py`: Main logic for AI interaction.
 - `ai_run.sh`: Entry point script.
 - `configure.sh`: Setup script.
+- `mcp_tools.py`: MCP tool integration module.
 - `config/`: Directory for private configurations (stored in a separate repository).
+
+## MCP 工具支持
+
+本项目现已支持 Model Context Protocol (MCP)，允许 AI 调用外部工具。
+
+### 配置 MCP Tools
+
+在 `~/.config/ai/mcp_config.json` 中配置你的 MCP 服务器。例如：
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/path/to/search"],
+      "type": "stdio"
+    }
+  }
+}
+```
