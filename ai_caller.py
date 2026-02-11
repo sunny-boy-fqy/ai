@@ -571,13 +571,19 @@ def get_version():
 
 def upgrade_tool():
     print("⏳ 正在检查更新...")
-    install_script = os.path.join(BASE_DIR, "install.sh")
-    if os.path.exists(install_script):
-        # We use the current python to run the shell script to ensure we stay in context if possible
-        # but bash is better for install.sh
-        subprocess.run(["bash", install_script, "--upgrade"])
+    if IS_WINDOWS:
+        install_script = os.path.join(BASE_DIR, "install.ps1")
+        if os.path.exists(install_script):
+            # Run PowerShell script
+            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", install_script])
+        else:
+            print("❌ 找不到安装脚本 (install.ps1)，请手动更新。")
     else:
-        print("❌ 找不到安装脚本，请手动更新。")
+        install_script = os.path.join(BASE_DIR, "install.sh")
+        if os.path.exists(install_script):
+            subprocess.run(["bash", install_script, "--upgrade"])
+        else:
+            print("❌ 找不到安装脚本 (install.sh)，请手动更新。")
 
 def show_status():
     cfg = get_contextual_config()

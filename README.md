@@ -3,15 +3,15 @@
 一个轻量级、功能强大的命令行 AI 助手，支持多供应商、MCP 工具调用和 YOLO 模式。
 
 ## 🚀 快速安装
-
 ### Linux / macOS
+前置需求：curl,git or unzip
 在终端执行以下命令：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.sh | bash
 ```
 
 ### Windows
-### 修BUG中。。。
+前置需求：curl,git(最好有)
 在 PowerShell 中执行以下命令：
 ```powershell
 irm https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.ps1 | iex
