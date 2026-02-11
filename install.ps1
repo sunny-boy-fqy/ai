@@ -87,6 +87,9 @@ if ($CurrentPath -notlike "*$TARGET_DIR*") {
     Write-Host "ℹ️ $TARGET_DIR is already in PATH." -ForegroundColor Yellow
 }
 
+$versionPath = Join-Path $TARGET_DIR "version.txt"
+$version = if (Test-Path $versionPath) { Get-Content $versionPath -Raw } else { "v0.1" }
+
 Write-Host "`n✅ Installation/Update complete!" -ForegroundColor Green
 Write-Host "Please restart your terminal or run: `$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')`"
-Write-Host "Current version: $(Get-Content "$TARGET_DIR\version.txt" -ErrorAction SilentlyContinue)"
+Write-Host "Current version: $version"
