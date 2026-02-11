@@ -39,6 +39,8 @@ ai model         # 切换模型或创建本地配置
 ai upgrade       # 自动更新至最新版本
 ```
 
+注意，要求输入的URL是以/v1结尾的那个（openai格式）
+
 ### 卸载
 ```bash
 bash ~/ai/uninstall.sh
@@ -51,3 +53,16 @@ bash ~/ai/uninstall.sh
 
 ## 许可证
 MIT
+## 免费可用大模型
+### 可以看这个大佬的仓库
+- https://github.com/for-the-zero/Free-LLM-Collection
+
+### github项目 GPT_API_FREE
+- https://github.com/chatanywhere/GPT_API_free
+
+### nvidia
+- https://build.nvidia.com/
+
+
+
+
