@@ -31,8 +31,15 @@ class MCPToolManager:
             command = cfg["command"]
             args = cfg.get("args", [])
             
+            # Windows compatibility for npx and other commands
+            if sys.platform.startswith("win"):
+                if command == "npx":
+                    command = "npx.cmd"
+                elif command == "npm":
+                    command = "npm.cmd"
+            
             # Special handling for npx to suppress install messages
-            if command == "npx":
+            if "npx" in command:
                 if "-y" not in args:
                     args.insert(0, "-y")
             

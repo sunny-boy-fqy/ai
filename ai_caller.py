@@ -17,6 +17,8 @@ MCP_SERVERS_DIR = os.path.join(USER_AI_DIR, "mcp_servers")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(MCP_SERVERS_DIR, exist_ok=True)
 
+IS_WINDOWS = sys.platform.startswith("win")
+
 # Determine Base Directory (Repo Location)
 if not os.path.exists(os.path.join(CONFIG_DIR, 'base_path.config')):
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +30,13 @@ if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-VENV_PIP = os.path.join(CONFIG_DIR, "python_venv/bin/pip")
+if IS_WINDOWS:
+    VENV_PIP = os.path.join(CONFIG_DIR, "python_venv", "Scripts", "pip.exe")
+    VENV_PYTHON = os.path.join(CONFIG_DIR, "python_venv", "Scripts", "python.exe")
+else:
+    VENV_PIP = os.path.join(CONFIG_DIR, "python_venv", "bin", "pip")
+    VENV_PYTHON = os.path.join(CONFIG_DIR, "python_venv", "bin", "python3")
+
 MCP_CONFIG = os.path.join(CONFIG_DIR, "mcp_config.json")
 WORKSPACE_CONFIG = os.path.join(CONFIG_DIR, "workspace.config")
 
@@ -571,6 +579,21 @@ def upgrade_tool():
     else:
         print("❌ 找不到安装脚本，请手动更新。")
 
+def show_status():
+    cfg = get_contextual_config()
+    p = cfg.get("current_provider", "未设置")
+    sett = cfg.get("provider_settings", {}).get(p, {})
+    m = sett.get("current_model", "未设置")
+    ws = cfg.get("workspace", "未设置")
+    is_local = " (本地配置)" if cfg.get("is_local") else ""
+    
+    print(f"\n=== 🤖 AI CLI 状态 ===")
+    print(f"当前供应商: {p}{is_local}")
+    print(f"当前大模型: {m}")
+    print(f"当前工作区: {ws}")
+    if not p or p == "未设置":
+        print("\n💡 提示: 使用 'ai new' 配置供应商。")
+
 async def main():
     parser = argparse.ArgumentParser(description="AI CLI Tool", add_help=False)
     parser.add_argument("command", nargs="?", help="Subcommand or query")
@@ -597,6 +620,7 @@ async def main():
     if cmd == "new": setup_new_api()
     elif cmd == "chat": await start_chat(yolo_mode=yolo_mode)
     elif cmd == "model": manage_model()
+    elif cmd == "status": show_status()
     elif cmd == "upgrade": upgrade_tool()
     elif cmd == "workspace":
         if len(args) > 1: set_workspace(args[1])
@@ -629,6 +653,7 @@ def show_help():
   ai new              添加/配置供应商
   ai model            切换模型 / 创建本地配置
   ai switch           切换供应商
+  ai status           显示当前状态 (供应商、模型、工作区)
   ai workspace [path] 设置工作区 (限制文件访问范围)
 
 系统命令:
