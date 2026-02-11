@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# AI Tool Installation Script
+# AI Tool Installation & Update Script
 
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 CONFIG_DIR="$HOME/.config/ai"
@@ -8,10 +8,25 @@ USER_AI_DIR="$HOME/.ai"
 MCP_SERVERS_DIR="$USER_AI_DIR/mcp_servers"
 VENV_PATH="$CONFIG_DIR/python_venv"
 
-echo "=== 🤖 AI CLI Installation ==="
+echo "=== 🤖 AI CLI Installation/Update ==="
+
+# 0. Check for Update
+if [ -d "$REPO_DIR/.git" ]; then
+    echo "Checking for updates..."
+    cd "$REPO_DIR"
+    git fetch origin
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse @{u})
+    if [ "$LOCAL" != "$REMOTE" ] || [ "$1" == "--upgrade" ]; then
+        echo "Updating to latest version..."
+        git pull
+    else
+        echo "Already at the latest version."
+    fi
+fi
 
 # 1. Directory Setup
-echo "Creating directories..."
+echo "Ensuring directories exist..."
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$MCP_SERVERS_DIR"
 
@@ -24,27 +39,22 @@ if [ ! -d "$VENV_PATH" ]; then
     python3 -m venv "$VENV_PATH"
 fi
 
-# 4. Install Dependencies
-echo "Installing Python dependencies..."
-# Update pip first
+# 4. Install/Update Dependencies
+echo "Installing/Updating Python dependencies..."
 "$VENV_PATH/bin/pip" install --upgrade pip
-# Install required packages
 "$VENV_PATH/bin/pip" install openai zhipuai groq beautifulsoup4 ebooklib httpx PyJWT tqdm pydantic lxml requests mcp ddgs duckduckgo_search
 
-# 5. MCP Configuration
+# 5. MCP Configuration (Preserve if exists)
 echo "Configuring MCP..."
-
-# Copy built-in servers to user directory if they don't exist
-if [ -f "$REPO_DIR/mcp_servers/web_search_server.py" ]; then
-    cp "$REPO_DIR/mcp_servers/web_search_server.py" "$MCP_SERVERS_DIR/"
-fi
-# Note: Since we moved files in the previous step manually, this might fail if the repo is clean.
-# But for a fresh install from git, the files would be in the repo.
-# For now, let's assume the user has the repo.
-
-# Generate mcp_config.json
 MCP_CONFIG_PATH="$CONFIG_DIR/mcp_config.json"
-cat > "$MCP_CONFIG_PATH" <<EOF
+
+if [ ! -f "$MCP_CONFIG_PATH" ]; then
+    # Copy built-in servers if they exist in repo
+    if [ -f "$REPO_DIR/mcp_servers/web_search_server.py" ]; then
+        cp "$REPO_DIR/mcp_servers/web_search_server.py" "$MCP_SERVERS_DIR/"
+    fi
+
+    cat > "$MCP_CONFIG_PATH" <<EOF
 {
   "servers": {
     "filesystem": {
@@ -60,7 +70,10 @@ cat > "$MCP_CONFIG_PATH" <<EOF
   }
 }
 EOF
-echo "Generated MCP config at $MCP_CONFIG_PATH"
+    echo "Generated new MCP config at $MCP_CONFIG_PATH"
+else
+    echo "Preserving existing MCP config."
+fi
 
 # 6. Alias Setup
 BASHRC="$HOME/.bashrc"
@@ -68,6 +81,7 @@ AI_RUN_SCRIPT="$REPO_DIR/ai_run.sh"
 ALIAS_LINE="alias ai='$AI_RUN_SCRIPT'"
 
 if grep -q "alias ai=" "$BASHRC"; then
+    # Update existing alias if path changed
     sed -i "s|alias ai=.*|$ALIAS_LINE|" "$BASHRC"
 else
     echo -e "\n# AI Shortcut\n$ALIAS_LINE" >> "$BASHRC"
@@ -75,7 +89,9 @@ fi
 
 # 7. Permission Fix
 chmod +x "$AI_RUN_SCRIPT"
+chmod +x "$REPO_DIR/uninstall.sh"
+chmod +x "$REPO_DIR/install.sh"
 
-echo -e "\n✅ Installation Complete!"
+echo -e "\n✅ Installation/Update Complete!"
+echo "Current Version: $(cat $REPO_DIR/version.txt 2>/dev/null || echo 'unknown')"
 echo "Please run: source ~/.bashrc"
-echo "Usage: ai 'help'"

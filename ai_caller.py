@@ -553,15 +553,30 @@ def manage_model():
             print(f"✅ 全局模型已切换为: {target}")
         except: pass
 
+VERSION_FILE = os.path.join(BASE_DIR, "version.txt")
+
+def get_version():
+    if os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE, "r") as f:
+            return f.read().strip()
+    return "unknown"
+
+def upgrade_tool():
+    print("⏳ 正在检查更新...")
+    install_script = os.path.join(BASE_DIR, "install.sh")
+    if os.path.exists(install_script):
+        # We use the current python to run the shell script to ensure we stay in context if possible
+        # but bash is better for install.sh
+        subprocess.run(["bash", install_script, "--upgrade"])
+    else:
+        print("❌ 找不到安装脚本，请手动更新。")
+
 async def main():
     parser = argparse.ArgumentParser(description="AI CLI Tool", add_help=False)
     parser.add_argument("command", nargs="?", help="Subcommand or query")
     parser.add_argument("--yolo", action="store_true", help="Enable shell command execution")
+    parser.add_argument("--version", action="store_true", help="Show version")
     parser.add_argument("-h", "--help", action="store_true", help="Show help")
-    
-    # We parse known args first to handle flags mixed with query
-    # But for 'ai "query" --yolo', we need to be careful.
-    # Let's just manually inspect sys.argv for flags to keep it simple compatible with old behavior
     
     args = sys.argv[1:]
     yolo_mode = False
@@ -569,6 +584,10 @@ async def main():
         yolo_mode = True
         args.remove("--yolo")
     
+    if "--version" in args:
+        print(f"AI CLI {get_version()}")
+        return
+
     if not args or args[0] in ["-h", "--help"]:
         show_help()
         return
@@ -578,6 +597,7 @@ async def main():
     if cmd == "new": setup_new_api()
     elif cmd == "chat": await start_chat(yolo_mode=yolo_mode)
     elif cmd == "model": manage_model()
+    elif cmd == "upgrade": upgrade_tool()
     elif cmd == "workspace":
         if len(args) > 1: set_workspace(args[1])
         else: print(f"当前工作区: {get_current_workspace()}")
@@ -597,8 +617,8 @@ async def main():
         await call_ai(args, yolo_mode=yolo_mode)
 
 def show_help():
-    print("""
-🤖 AI CLI 工具 v2.0
+    print(f"""
+🤖 AI CLI 工具 {get_version()}
 ================================
 基本用法:
   ai [问题]            快速提问
@@ -610,6 +630,10 @@ def show_help():
   ai model            切换模型 / 创建本地配置
   ai switch           切换供应商
   ai workspace [path] 设置工作区 (限制文件访问范围)
+
+系统命令:
+  ai upgrade          更新至最新版本
+  ai --version        显示版本号
 
 高级功能:
   --yolo              允许 AI 执行系统命令 (慎用!)

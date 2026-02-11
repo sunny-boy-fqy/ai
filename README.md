@@ -1,50 +1,54 @@
-# AI CLI Tool
+# 🤖 AI CLI Tool
 
-A simple command-line interface for interacting with various AI providers (OpenAI, ZhipuAI, Groq, etc.).
+一个轻量级、功能强大的命令行 AI 助手，支持多供应商、MCP 工具调用和 YOLO 模式。
 
-## Features
-- Support for multiple AI providers and models.
-- Interactive chat mode with memory.
-- Easy provider and model management.
-- Dynamic base path configuration.
+## 🚀 快速安装
 
-## Installation
-1. Clone this repository.
-2. Clone your configuration repository into the `config` directory (or run `configure.sh` to initialize).
-3. Run `./configure.sh` to set up the `ai` alias in your `.bashrc`.
-4. Run `source ~/.bashrc`.
+在终端执行以下命令即可一键安装：
 
-## Usage
-- `ai [prompt]` - Quick query.
-- `ai chat` - Enter interactive chat mode.
-- `ai new` - Add a new provider or API key.
-- `ai model` - Switch or manage models.
-- `ai switch` - Switch between providers.
-- `ai status` - Show current status and asset statistics.
-
-## Project Structure
-- `ai_caller.py`: Main logic for AI interaction.
-- `ai_run.sh`: Entry point script.
-- `configure.sh`: Setup script.
-- `mcp_tools.py`: MCP tool integration module.
-- `config/`: Directory for private configurations (stored in a separate repository).
-
-## MCP 工具支持
-
-本项目现已支持 Model Context Protocol (MCP)，允许 AI 调用外部工具。
-
-### 配置 MCP Tools
-
-在 `~/.config/ai/mcp_config.json` 中配置你的 MCP 服务器。例如：
-
-```json
-{
-  "servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["@modelcontextprotocol/server-filesystem", "/path/to/search"],
-      "type": "stdio"
-    }
-  }
-}
+```bash
+git clone https://github.com/your-repo/ai.git ~/ai && bash ~/ai/install.sh && source ~/.bashrc
 ```
+*(注意：请将 URL 替换为实际的代码仓库地址)*
+
+## ✨ 主要功能
+
+- **多供应商支持**：OpenAI, ZhipuAI, Groq, DashScope, Anthropic 等。
+- **MCP 工具集成**：支持 Model Context Protocol，可扩展搜索、文件操作等工具。
+- **YOLO 模式**：允许 AI 直接执行系统 Shell 命令（通过 `--yolo` 开启）。
+- **版本管理**：支持自动升级和版本查看。
+- **工作区隔离**：可以为不同项目配置独立的工作区和 AI 设置。
+
+## 命令行用法
+
+### 基本查询
+```bash
+ai "今天天气怎么样？"
+ai --version
+```
+
+### 交互模式
+```bash
+ai chat          # 进入普通对话
+ai chat --yolo   # 进入 YOLO 模式（慎用！）
+```
+
+### 配置管理
+```bash
+ai new           # 添加 API Key 或新供应商
+ai model         # 切换模型或创建本地配置
+ai upgrade       # 自动更新至最新版本
+```
+
+### 卸载
+```bash
+bash ~/ai/uninstall.sh
+```
+
+## 🛠️ 配置存储
+
+- **配置文件**: `~/.config/ai/`
+- **MCP 服务器**: `~/.ai/mcp_servers/`
+
+## 许可证
+MIT
