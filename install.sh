@@ -7,7 +7,7 @@ CONFIG_DIR="$HOME/.config/ai"
 USER_AI_DIR="$HOME/.ai"
 MCP_SERVERS_DIR="$USER_AI_DIR/mcp_servers"
 VENV_PATH="$CONFIG_DIR/python_venv"
-REPO_URL="https://github.com/your-repo/ai.git" # 请替换为真实的仓库地址
+REPO_URL="https://github.com/sunny-boy-fqy/ai.git"
 
 echo "=== 🤖 AI CLI Installation/Update ==="
 
