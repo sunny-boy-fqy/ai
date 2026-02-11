@@ -7,9 +7,9 @@
 在终端执行以下命令即可一键安装：
 
 ```bash
-git clone https://github.com/your-repo/ai.git ~/ai && bash ~/ai/install.sh && source ~/.bashrc
+curl -fsSL https://raw.githubusercontent.com/your-repo/ai/main/install.sh | bash
 ```
-*(注意：请将 URL 替换为实际的代码仓库地址)*
+*(注意：请将 URL 替换为实际的 GitHub Raw 地址)*
 
 ## ✨ 主要功能
 
