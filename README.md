@@ -54,6 +54,11 @@ bash ~/ai/uninstall.sh
 ## 许可证
 MIT
 ## 免费可用大模型
+### 美团的良心longcat(推荐使用，免费方便，可用性强，适配工具)
+- longcat.chat
+- api接口 URL：https://api.longcat.chat/openai
+
+
 ### 可以看这个大佬的仓库
 - https://github.com/for-the-zero/Free-LLM-Collection
 
@@ -63,8 +68,6 @@ MIT
 ### nvidia
 - https://build.nvidia.com/
 
-### 美团的良心longcat
-- longcat.chat
 
 
 
