@@ -11,6 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.sh | 
 ```
 
 ### Windows
+### 修BUG中。。。
 在 PowerShell 中执行以下命令：
 ```powershell
 irm https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.ps1 | iex
