@@ -63,6 +63,8 @@ MIT
 ### nvidia
 - https://build.nvidia.com/
 
+### 美团的良心longcat
+- longcat.chat
 
 
 
