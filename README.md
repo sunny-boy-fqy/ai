@@ -7,9 +7,8 @@
 在终端执行以下命令即可一键安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-repo/ai/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.sh | bash
 ```
-*(注意：请将 URL 替换为实际的 GitHub Raw 地址)*
 
 ## ✨ 主要功能
 
