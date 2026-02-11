@@ -23,7 +23,7 @@ IS_WINDOWS = sys.platform.startswith("win")
 if not os.path.exists(os.path.join(CONFIG_DIR, 'base_path.config')):
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 else:
-    with open(os.path.join(CONFIG_DIR, 'base_path.config'), 'r') as f:
+    with open(os.path.join(CONFIG_DIR, 'base_path.config'), 'r', encoding='utf-8') as f:
         BASE_DIR = f.read().strip()
 
 if BASE_DIR not in sys.path:
@@ -76,7 +76,7 @@ def save_config(cfg):
 def get_current_workspace():
     """Gets the active workspace directory."""
     if os.path.exists(WORKSPACE_CONFIG):
-        with open(WORKSPACE_CONFIG, "r") as f:
+        with open(WORKSPACE_CONFIG, "r", encoding='utf-8') as f:
             ws = f.read().strip()
             if os.path.isdir(ws):
                 return ws
@@ -88,7 +88,7 @@ def set_workspace(path):
     if not os.path.isdir(abs_path):
         print(f"❌ Error: Directory '{abs_path}' does not exist.")
         return
-    with open(WORKSPACE_CONFIG, "w") as f:
+    with open(WORKSPACE_CONFIG, "w", encoding='utf-8') as f:
         f.write(abs_path)
     print(f"✅ Workspace set to: {abs_path}")
 
@@ -533,8 +533,8 @@ def manage_model():
     if choice == 'l':
         ws = get_current_workspace()
         local_path = os.path.join(ws, ".ai-config.json")
-        with open(local_path, "w") as f:
-            json.dump({"provider": p, "model": current_m}, f, indent=4)
+        with open(local_path, "w", encoding='utf-8') as f:
+            json.dump({"provider": p, "model": current_m}, f, indent=4, ensure_ascii=False)
         print(f"✅ 已在 {ws} 创建本地配置。以后在此目录下运行将优先使用 {p}/{current_m}。")
         return
 

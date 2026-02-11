@@ -23,22 +23,54 @@ if (-not (Check-Command "python")) {
     exit 1
 }
 
-# 2. Directory Setup
+# 2. Directory Setup & Download
 if (-not (Test-Path $TARGET_DIR)) {
     Write-Host "Creating target directory $TARGET_DIR ..."
     mkdir $TARGET_DIR | Out-Null
 }
 
 if (-not (Test-Path "$TARGET_DIR\.git")) {
-    Write-Host "Cloning repository..."
-    git clone https://github.com/sunny-boy-fqy/ai.git $TARGET_DIR
+    if (Check-Command "git") {
+        Write-Host "Cloning repository via git..."
+        git clone https://github.com/sunny-boy-fqy/ai.git $TARGET_DIR
+    } else {
+        Write-Host "⚠️ git not found. Falling back to ZIP download..." -ForegroundColor Yellow
+        $zipPath = "$env:TEMP\ai-main.zip"
+        $zipUrl = "https://github.com/sunny-boy-fqy/ai/archive/refs/heads/main.zip"
+        
+        Write-Host "Downloading $zipUrl ..."
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+        
+        Write-Host "Extracting..."
+        Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\ai-temp" -Force
+        
+        # Move files from the extracted subfolder (ai-main) to TARGET_DIR
+        $extractedDir = Get-ChildItem -Path "$env:TEMP\ai-temp" -Directory | Select-Object -First 1
+        Copy-Item -Path "$($extractedDir.FullName)\*" -Destination $TARGET_DIR -Recurse -Force
+        
+        # Cleanup
+        Remove-Item -Path $zipPath -Force
+        Remove-Item -Path "$env:TEMP\ai-temp" -Recurse -Force
+        Write-Host "✅ Downloaded source via ZIP." -ForegroundColor Green
+    }
+} else {
+    if (Check-Command "git") {
+        Write-Host "Updating via git..."
+        Set-Location $TARGET_DIR
+        git pull
+    } else {
+        Write-Host "ℹ️ Repository exists but git is missing. Skipping update." -ForegroundColor Yellow
+    }
 }
 
 # 3. Config Paths
 if (-not (Test-Path $CONFIG_DIR)) { mkdir $CONFIG_DIR | Out-Null }
 if (-not (Test-Path $MCP_SERVERS_DIR)) { mkdir $MCP_SERVERS_DIR | Out-Null }
 
-$TARGET_DIR | Out-File -FilePath "$CONFIG_DIR\base_path.config" -Encoding ascii -NoNewline
+# Explicitly use UTF8 encoding for all configuration files
+$TARGET_DIR | Out-File -FilePath "$CONFIG_DIR\base_path.config" -Encoding UTF8 -NoNewline
+
+# ... (Virtual Environment and Dependencies) ...
 
 # 4. Virtual Environment
 if (-not (Test-Path $VENV_PATH)) {

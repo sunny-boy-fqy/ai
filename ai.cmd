@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 set CONFIG_DIR=%USERPROFILE%\.config\ai
 if not exist "%CONFIG_DIR%\base_path.config" (
     echo [ERROR] AI CLI not initialized. Please run install.sh or install.ps1
