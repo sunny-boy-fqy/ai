@@ -58,29 +58,42 @@ check_dependencies
 
 # 2. 确定安装路径
 CONFIG_DIR="$HOME/.config/ai"
+# 优先尝试从现有配置读取
 if [ -f "$CONFIG_DIR/base_path.config" ]; then
     DEFAULT_DIR=$(cat "$CONFIG_DIR/base_path.config")
 else
     DEFAULT_DIR="$HOME/ai"
 fi
 
-read -p "请输入安装路径 [默认: $DEFAULT_DIR]: " INPUT_DIR
-TARGET_DIR=${INPUT_DIR:-$DEFAULT_DIR}
+# 如果还是空，强制设置
+if [ -z "$DEFAULT_DIR" ]; then
+    DEFAULT_DIR="$HOME/ai"
+fi
+
+# 如果是在脚本所在目录运行
+CURRENT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 非交互模式下直接使用 DEFAULT_DIR
+if [ -t 0 ]; then
+    read -p "请输入安装路径 [默认: $DEFAULT_DIR]: " INPUT_DIR
+    TARGET_DIR=${INPUT_DIR:-$DEFAULT_DIR}
+else
+    TARGET_DIR="$DEFAULT_DIR"
+fi
+
 TARGET_DIR="${TARGET_DIR/#\~/$HOME}"
 REPO_DIR="$TARGET_DIR"
 
-# 3. 仓库下载
+# 3. 仓库下载/更新
+mkdir -p "$TARGET_DIR"
 if [ -d "$TARGET_DIR/.git" ]; then
-    cd "$TARGET_DIR"
+    cd "$TARGET_DIR" || exit 1
     if command -v git &> /dev/null; then
         echo "正在检查更新..."
         git pull
     fi
 else
-    if [ -f "ai_caller.py" ] && [ -f "install.sh" ] && [ "$(pwd)" == "$TARGET_DIR" ]; then
-        echo "当前已在目标目录。"
-    else
-        mkdir -p "$TARGET_DIR"
+    if [ "$CURRENT_SCRIPT_DIR" != "$TARGET_DIR" ]; then
         if command -v git &> /dev/null; then
             git clone "$REPO_URL" "$TARGET_DIR"
         else
@@ -94,8 +107,9 @@ else
     fi
 fi
 
-# 确保脚本权限
-cd "$REPO_DIR"
+# 核心：确保进入了正确的目录并写入配置
+cd "$REPO_DIR" || exit 1
+echo "$REPO_DIR" > "$CONFIG_DIR/base_path.config"
 
 # 4. 目录设置
 echo "确保目录存在..."
