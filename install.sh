@@ -57,18 +57,51 @@ check_dependencies() {
 check_dependencies
 
 # 2. 确定安装路径
-DEFAULT_DIR="$HOME/ai"
+CONFIG_DIR="$HOME/.config/ai"
+if [ -f "$CONFIG_DIR/base_path.config" ]; then
+    DEFAULT_DIR=$(cat "$CONFIG_DIR/base_path.config")
+else
+    DEFAULT_DIR="$HOME/ai"
+fi
+
 read -p "请输入安装路径 [默认: $DEFAULT_DIR]: " INPUT_DIR
 TARGET_DIR=${INPUT_DIR:-$DEFAULT_DIR}
 TARGET_DIR="${TARGET_DIR/#\~/$HOME}"
+REPO_DIR="$TARGET_DIR"
 
-# 3. 仓库下载 (省略部分逻辑，确保 TARGET_DIR 正确)
-# ... (保持原有的 git clone 或 zip 下载逻辑，但使用新的 TARGET_DIR)
+# 3. 仓库下载
+if [ -d "$TARGET_DIR/.git" ]; then
+    cd "$TARGET_DIR"
+    if command -v git &> /dev/null; then
+        echo "正在检查更新..."
+        git pull
+    fi
+else
+    if [ -f "ai_caller.py" ] && [ -f "install.sh" ] && [ "$(pwd)" == "$TARGET_DIR" ]; then
+        echo "当前已在目标目录。"
+    else
+        mkdir -p "$TARGET_DIR"
+        if command -v git &> /dev/null; then
+            git clone "$REPO_URL" "$TARGET_DIR"
+        else
+            ZIP_URL="https://github.com/sunny-boy-fqy/ai/archive/refs/heads/main.zip"
+            TEMP_ZIP="/tmp/ai-main.zip"
+            curl -L "$ZIP_URL" -o "$TEMP_ZIP"
+            unzip -o "$TEMP_ZIP" -d /tmp/ai-temp
+            cp -r /tmp/ai-temp/ai-main/* "$TARGET_DIR/"
+            rm -rf /tmp/ai-temp "$TEMP_ZIP"
+        fi
+    fi
+fi
+
+# 确保脚本权限
+cd "$REPO_DIR"
 
 # 4. 目录设置
 echo "确保目录存在..."
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$MCP_SERVERS_DIR"
+echo "$REPO_DIR" > "$CONFIG_DIR/base_path.config"
 NODE_LOCAL_DIR="$CONFIG_DIR/node"
 
 # 5. 本地 Node.js 安装 (零污染方案)
@@ -141,15 +174,16 @@ fi
 # 8. 别名设置
 BASHRC="$HOME/.bashrc"
 AI_RUN_SCRIPT="$REPO_DIR/ai_run.sh"
+# 确保绝对路径被正确写入
 ALIAS_LINE="alias ai='$AI_RUN_SCRIPT'"
+
+# 9. 权限与完成
+chmod +x "$AI_RUN_SCRIPT" "$REPO_DIR/uninstall.sh" "$REPO_DIR/install.sh"
 if grep -q "alias ai=" "$BASHRC"; then
     sed -i "s|alias ai=.*|$ALIAS_LINE|" "$BASHRC"
 else
     echo -e "\n# AI Shortcut\n$ALIAS_LINE" >> "$BASHRC"
 fi
-
-# 9. 权限与完成
-chmod +x "$AI_RUN_SCRIPT" "$REPO_DIR/uninstall.sh" "$REPO_DIR/install.sh"
 echo -e "\n✅ 安装/更新完成！"
 echo "当前版本: $(cat "$REPO_DIR/version.txt" 2>/dev/null || echo 'v0.1')"
 echo "请执行: source ~/.bashrc"

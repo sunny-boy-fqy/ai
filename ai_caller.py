@@ -23,11 +23,20 @@ IS_WINDOWS = sys.platform.startswith("win")
 if not os.path.exists(os.path.join(CONFIG_DIR, 'base_path.config')):
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 else:
-    with open(os.path.join(CONFIG_DIR, 'base_path.config'), 'r', encoding='utf-8') as f:
-        BASE_DIR = f.read().strip()
+    try:
+        with open(os.path.join(CONFIG_DIR, 'base_path.config'), 'r', encoding='utf-8-sig') as f:
+            BASE_DIR = f.read().strip().replace('"', '').replace("'", "")
+    except:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+if not BASE_DIR or not os.path.exists(BASE_DIR):
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
+
+# Constants using BASE_DIR
+VERSION_FILE = os.path.join(BASE_DIR, "version.txt")
 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 if IS_WINDOWS:
@@ -570,6 +579,8 @@ def download_config(repo_url):
         
         # 拷贝新内容
         for item in os.listdir(temp_dir):
+            if item in ["python_venv", "node", ".git"]: # 严格排除环境目录
+                continue
             s = os.path.join(temp_dir, item)
             d = os.path.join(CONFIG_DIR, item)
             if os.path.isdir(s):
@@ -587,6 +598,68 @@ def download_config(repo_url):
     except Exception as e:
         print(f"❌ 同步失败: {e}")
     finally:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, onexc=remove_readonly)
+
+def upload_config(repo_url):
+    import tempfile
+    import stat
+    print(f"⏳ 正在同步配置到 {repo_url} ...")
+
+    def remove_readonly(func, path, _):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+
+    temp_dir = tempfile.mkdtemp()
+    try:
+        # 1. 克隆仓库到临时目录
+        if shutil.which("git"):
+            subprocess.run(["git", "clone", "--depth", "1", repo_url, temp_dir], check=True)
+        else:
+            print("❌ 未检测到 git，无法上传。")
+            return
+
+        # 2. 清理仓库中旧的配置（保留 .git）
+        for item in os.listdir(temp_dir):
+            if item == ".git": continue
+            item_path = os.path.join(temp_dir, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path, onexc=remove_readonly)
+            else:
+                os.remove(item_path)
+
+        # 3. 拷贝本地配置到临时目录
+        print("📦 正在准备配置文件...")
+        for item in os.listdir(CONFIG_DIR):
+            if item in ["python_venv", "node", ".git", "base_path.config"]: # 排除环境和机器特定配置
+                continue
+            s = os.path.join(CONFIG_DIR, item)
+            d = os.path.join(temp_dir, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+
+        # 4. 提交并推送
+        os.chdir(temp_dir)
+        subprocess.run(["git", "add", "."], check=True)
+        
+        # 检查是否有变更
+        status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+        if not status.stdout.strip():
+            print("ℹ️ 配置已是最新，无需更新。")
+            return
+
+        commit_msg = f"Update config from CLI at {subprocess.check_output(['date']).decode().strip()}"
+        subprocess.run(["git", "commit", "-m", commit_msg], check=True)
+        subprocess.run(["git", "push"], check=True)
+        
+        print("✅ 配置已成功上传到仓库！")
+
+    except Exception as e:
+        print(f"❌ 上传失败: {e}")
+    finally:
+        os.chdir(BASE_DIR) # 回到原目录
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, onexc=remove_readonly)
 
@@ -723,13 +796,13 @@ def upgrade_tool():
     if IS_WINDOWS:
         install_script = os.path.join(BASE_DIR, "install.ps1")
         if os.path.exists(install_script):
-            # Use shell=True for Windows and ensure we use powershell.exe
             try:
+                # Use quoted path to handle spaces
                 subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", install_script], check=True)
             except Exception as e:
                 print(f"❌ 更新失败: {e}")
         else:
-            print(f"❌ 找不到安装脚本: {install_script}")
+            print(f"❌ 找不到安装脚本: \"{install_script}\"")
     else:
         install_script = os.path.join(BASE_DIR, "install.sh")
         if os.path.exists(install_script):
@@ -809,6 +882,9 @@ async def main():
     elif cmd == "download":
         if len(full_args) > 1: download_config(full_args[1])
         else: print("用法: ai download [Git 仓库 URL]")
+    elif cmd == "update":
+        if len(full_args) > 1: upload_config(full_args[1])
+        else: print("用法: ai update [Git 仓库 URL]")
     elif cmd == "workspace":
         if len(full_args) > 1: set_workspace(full_args[1])
         else: print(f"当前工作区: {get_current_workspace()}")
@@ -850,6 +926,7 @@ AI CLI 是一个全能的命令行 AI 助手，支持工具调用、系统操作
   ai switch           在已配置的供应商之间快速切换
   ai delete           删除不需要的供应商或特定的 API Key
   ai download [url]   从 Git 仓库下载并覆盖所有配置 (用于多机同步)
+  ai update [url]     上传本地配置到 Git 仓库
   ai status           查看当前生效的供应商、模型及工作区路径
   ai workspace [path] 设置 AI 的活动范围（影响文件系统工具的访问权限）
 
