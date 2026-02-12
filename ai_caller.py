@@ -555,7 +555,8 @@ def download_config(repo_url):
     # 禁用 Git 交互式提示，防止弹出用户名密码输入
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    # 核心修复：添加 StrictHostKeyChecking=no 自动接受主机指纹
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
 
     def remove_readonly(func, path, _):
         os.chmod(path, stat.S_IWRITE)
@@ -636,7 +637,8 @@ def upload_config(repo_url):
     # 禁用所有交互式提示
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    # 核心修复：添加 StrictHostKeyChecking=no 自动接受主机指纹
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
 
     def remove_readonly(func, path, _):
         os.chmod(path, stat.S_IWRITE)
