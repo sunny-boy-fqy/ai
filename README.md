@@ -1,6 +1,6 @@
-# 🤖 AI CLI Tool
+# 🤖 AI CLI Tool (v1.1)
 
-一个全能的命令行 AI 助手，支持工具调用 (MCP)、YOLO 模式、文件上传、多行交互和多供应商切换。
+一个模块化、功能强大的命令行 AI 助手，支持工具调用 (MCP)、对话历史管理、自主插件扩展及多供应商叠加同步。
 
 ## 🚀 快速安装
 
@@ -16,50 +16,34 @@ irm https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.ps1 | iex
 
 ---
 
-## 📦 零污染环境隔离 (Zero-Pollution)
+## ✨ 核心特性
 
-本工具遵循“不污染系统”原则，所有依赖均在本地运行：
-1.  **代码目录**: 默认安装在 `~/ai`。
-2.  **私有 Node.js**: 自动下载绿色版 Node.js 到 `~/.config/ai/node`。**不会修改系统 PATH**，不影响系统已有的 Node 环境。
-3.  **Python 虚拟环境**: 自动在 `~/.config/ai/python_venv` 创建隔离环境。
-
-### 推荐环境 (可选)
-*   **Git**: **非必须**。如果有 Git，安装程序会克隆仓库以便于后续 `ai upgrade` 自动更新；如果没有 Git，安装程序会自动下载并解压 ZIP 压缩包。
-*   **curl**: 用于下载必要的组件。如果您的系统没有 curl：
-    *   **Linux (Debian/Ubuntu)**: `sudo apt install curl`
-    *   **Linux (CentOS/Fedora)**: `sudo dnf install curl`
-    *   **Windows**: 现代 Windows 10/11 通常自带。如果没有，请在 PowerShell 执行: `winget install curl` 或前往 [curl.se](https://curl.se/windows/) 下载。
-
----
-
-## 🌟 推荐模型供应商 (兼容 OpenAI 格式)
-
-*   **LongCat (强烈推荐)**: 适配工具调用，免费额度大。URL: `https://api.longcat.chat/openai`
-*   **SiliconFlow (硅基流动)**: Llama 3 等模型极速且低成本。URL: `https://api.siliconflow.cn/v1`
-*   **DeepSeek**: 代码能力极强，性价比之王。URL: `https://api.deepseek.com`
-*   **智谱 AI**: 国产标杆。
+1.  **模块化设计**: 代码重构为多个工具包（Config, Session, Chat, MCP, Sync），运行更稳定，维护更方便。
+2.  **自主插件系统 (Marketplace)**: AI 可以通过 `search_market` 发现数千个 MCP 插件，并自主调用 `install_plugin` 进行安装。
+3.  **对话历史 (ai history)**: 对话自动存入 `~/.ai/session`。支持按编号加载旧会话、删除记录或开启新对话。
+4.  **智能叠加同步**: `ai download` 和 `ai update` 采用叠加模式，多台设备间的 API Key 自动查重并顺延编号，互不覆盖。
+5.  **零污染环境**: 内置私有 Node.js 和 Python 虚拟环境，`ai uninstall` 支持一键彻底清理。
 
 ---
 
 ## 📖 常用命令
 
+### 对话与交互
 *   `ai "帮我写个脚本"`: 快速提问。
-*   `ai chat`: 持续对话模式。
-*   `ai chat -f ./main.py`: 带上本地文件内容。
-*   `ai chat --yolo`: **YOLO 模式**，AI 可以直接操作您的终端。
-*   **多行输入**: 对话中输入 `"""` 开启/结束。
+*   `ai chat`: 开启持续对话。支持多行输入 (`"""`) 和文件上传 (`-f`)。
+*   `ai history`: 查看最近 20 条对话，输入编号继续，输入 `d编号` 删除。
 
----
+### 配置管理
+*   `ai status`: 查看当前活跃的供应商、模型及工作区路径。
+*   `ai list`: 列出所有已配置供应商的详细信息。
+*   `ai new`: 交互式配置新供应商或追加 API Key。
+*   `ai model`: 切换当前供应商的模型或录入新模型。
+*   `ai switch`: 快速切换活跃供应商。
+*   `ai delete`: 移除特定供应商配置或 API Key（编号自动重排）。
 
-## 🛠️ 配置与维护
-*   `ai new`: 添加新供应商。
-*   `ai switch`: 快速切换供应商。
-*   `ai download [url]`: 从 Git 仓库下载并**合并/叠加**配置（不覆盖本地已有 Key，API 编号自动顺延）。
-*   `ai update [url]`: 将本地配置**合并/叠加**上传到指定的 Git 仓库（仅限 SSH URL）。
-*   `ai model`: 切换模型或创建本地文件夹配置 (`l`)。
-*   `ai status`: 查看当前状态。
-*   `ai upgrade`: 自动更新工具。
-*   `ai uninstall`: 安全卸载。
+### 系统维护
+*   `ai upgrade [v]`: 更新到最新或指定版本。
+*   `ai uninstall`: 彻底卸载工具及所有私有环境。
 
 ## 许可证
 MIT
