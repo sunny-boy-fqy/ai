@@ -1,6 +1,5 @@
 # AI Tool Installation & Update Script for Windows
 
-$TARGET_DIR = "$HOME\ai"
 $CONFIG_DIR = "$HOME\.config\ai"
 $USER_AI_DIR = "$HOME\.ai"
 $MCP_SERVERS_DIR = "$USER_AI_DIR\mcp_servers"
@@ -8,13 +7,18 @@ $VENV_PATH = "$CONFIG_DIR\python_venv"
 
 Write-Host "=== 🤖 AI CLI Installation/Update (Windows) ===" -ForegroundColor Cyan
 
+# 0. Helper Functions
+function Check-Command($cmd) {
+    Get-Command $cmd -ErrorAction SilentlyContinue
+}
+
 # 1. Check Dependencies
 function Check-Python {
-    if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
+    if (-not (Check-Command "python")) {
         Write-Host "⚠️  未检测到 Python。" -ForegroundColor Yellow
         $useWinget = Read-Host "是否尝试通过 winget 自动安装 Python 3? (y/n)"
         if ($useWinget -eq "y") {
-            if (Get-Command "winget" -ErrorAction SilentlyContinue) {
+            if (Check-Command "winget") {
                 Write-Host "正在通过 winget 安装 Python..."
                 winget install Python.Python.3
                 Write-Host "✅ Python 安装指令已发送，请在安装完成后重新启动此脚本。" -ForegroundColor Cyan
@@ -39,10 +43,6 @@ function Check-Python {
 
 Check-Python
 
-if (-not (Check-Command "git")) {
-    Write-Host "ℹ️ 未检测到 git，将使用 ZIP 下载模式。" -ForegroundColor Yellow
-}
-
 # 2. Directory Setup
 $DEFAULT_DIR = "$HOME\ai"
 $TARGET_DIR = Read-Host "请输入安装路径 [默认: $DEFAULT_DIR]"
@@ -53,6 +53,8 @@ if (-not (Test-Path $TARGET_DIR)) {
     mkdir $TARGET_DIR | Out-Null
 }
 
+# 3. Node.js Local Setup (Zero-Pollution)
+if (-not (Test-Path $CONFIG_DIR)) { mkdir $CONFIG_DIR | Out-Null }
 $NODE_LOCAL_DIR = "$CONFIG_DIR\node"
 if (-not (Test-Path "$NODE_LOCAL_DIR\node.exe")) {
     Write-Host "正在安装私有 Node.js 运行环境 (零污染)..." -ForegroundColor Cyan
@@ -71,9 +73,10 @@ if (-not (Test-Path "$NODE_LOCAL_DIR\node.exe")) {
     Remove-Item "$env:TEMP\node-temp" -Recurse -Force
     Write-Host "✅ 本地 Node.js 安装完成。" -ForegroundColor Green
 }
-
-$LOCAL_NODE = "$NODE_LOCAL_DIR\node.exe"
 $LOCAL_NPX = "$NODE_LOCAL_DIR\npx.cmd"
+
+# 4. Download / Update Source
+if (-not (Test-Path "$TARGET_DIR\.git")) {
     if (Check-Command "git") {
         Write-Host "Cloning repository via git..."
         git clone https://github.com/sunny-boy-fqy/ai.git $TARGET_DIR
@@ -88,11 +91,9 @@ $LOCAL_NPX = "$NODE_LOCAL_DIR\npx.cmd"
         Write-Host "Extracting..."
         Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\ai-temp" -Force
         
-        # Move files from the extracted subfolder (ai-main) to TARGET_DIR
         $extractedDir = Get-ChildItem -Path "$env:TEMP\ai-temp" -Directory | Select-Object -First 1
         Copy-Item -Path "$($extractedDir.FullName)\*" -Destination $TARGET_DIR -Recurse -Force
         
-        # Cleanup
         Remove-Item -Path $zipPath -Force
         Remove-Item -Path "$env:TEMP\ai-temp" -Recurse -Force
         Write-Host "✅ Downloaded source via ZIP." -ForegroundColor Green
@@ -107,27 +108,23 @@ $LOCAL_NPX = "$NODE_LOCAL_DIR\npx.cmd"
     }
 }
 
-# 3. Config Paths
-if (-not (Test-Path $CONFIG_DIR)) { mkdir $CONFIG_DIR | Out-Null }
+# 5. Config Paths
+if (-not (Test-Path $USER_AI_DIR)) { mkdir $USER_AI_DIR | Out-Null }
 if (-not (Test-Path $MCP_SERVERS_DIR)) { mkdir $MCP_SERVERS_DIR | Out-Null }
-
-# Explicitly use UTF8 encoding for all configuration files
 $TARGET_DIR | Out-File -FilePath "$CONFIG_DIR\base_path.config" -Encoding UTF8 -NoNewline
 
-# ... (Virtual Environment and Dependencies) ...
-
-# 4. Virtual Environment
+# 6. Virtual Environment
 if (-not (Test-Path $VENV_PATH)) {
     Write-Host "Creating Python virtual environment..."
     python -m venv $VENV_PATH
 }
 
-# 5. Install Dependencies
+# 7. Install Dependencies
 Write-Host "Installing/Updating Python dependencies..."
 & "$VENV_PATH\Scripts\pip.exe" install --upgrade pip
 & "$VENV_PATH\Scripts\pip.exe" install openai zhipuai groq beautifulsoup4 ebooklib httpx PyJWT tqdm pydantic lxml requests mcp ddgs duckduckgo_search
 
-# 6. MCP Config
+# 8. MCP Config
 $MCP_CONFIG_PATH = "$CONFIG_DIR\mcp_config.json"
 if (-not (Test-Path $MCP_CONFIG_PATH)) {
     if (Test-Path "$TARGET_DIR\mcp_servers\web_search_server.py") {
@@ -152,7 +149,7 @@ if (-not (Test-Path $MCP_CONFIG_PATH)) {
     $mcp_content | Out-File -FilePath $MCP_CONFIG_PATH -Encoding utf8
 }
 
-# 7. PATH Setup
+# 9. PATH Setup
 Write-Host "Setting up PATH..." -ForegroundColor Cyan
 $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($CurrentPath -notlike "*$TARGET_DIR*") {

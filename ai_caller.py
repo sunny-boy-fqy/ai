@@ -518,6 +518,70 @@ def delete_provider_or_api():
                 print(f"ℹ️ 由于无可用 Key，供应商 '{p_name}' 已自动移除。")
         except: print("❌ 无效编号。")
 
+def download_config(repo_url):
+    import tempfile
+    print(f"⏳ 正在从 {repo_url} 同步配置...")
+    
+    # 1. 备份关键的机器特定配置 (安装路径)
+    base_path_cfg = os.path.join(CONFIG_DIR, 'base_path.config')
+    base_path_content = None
+    if os.path.exists(base_path_cfg):
+        with open(base_path_cfg, 'r', encoding='utf-8') as f:
+            base_path_content = f.read()
+    
+    # 2. 创建临时目录进行克隆
+    temp_dir = tempfile.mkdtemp()
+    try:
+        if shutil.which("git"):
+            subprocess.run(["git", "clone", "--depth", "1", repo_url, temp_dir], check=True)
+        else:
+            print("❌ 未检测到 git，无法从仓库下载。请先安装 git。")
+            return
+
+        # 移除克隆下来的 .git 目录
+        git_dir = os.path.join(temp_dir, ".git")
+        if os.path.exists(git_dir):
+            shutil.rmtree(git_dir)
+
+        # 3. 确认覆盖
+        confirm = input(f"⚠️  确定要使用下载的内容覆盖 {CONFIG_DIR} 吗？当前所有 API Key 和设置将丢失。(y/N): ").lower()
+        if confirm != 'y':
+            print("操作已取消。")
+            return
+
+        # 4. 执行覆盖
+        # 移除旧目录（除了一些正在使用的可能导致锁定的文件，但通常配置目录没问题）
+        for item in os.listdir(CONFIG_DIR):
+            item_path = os.path.join(CONFIG_DIR, item)
+            if item == "python_venv" or item == "node": # 保留本地运行环境，只覆盖配置
+                continue
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+            else:
+                os.remove(item_path)
+        
+        # 拷贝新内容
+        for item in os.listdir(temp_dir):
+            s = os.path.join(temp_dir, item)
+            d = os.path.join(CONFIG_DIR, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+        
+        # 5. 还原 base_path.config (确保工具能找到源码)
+        if base_path_content:
+            with open(base_path_cfg, 'w', encoding='utf-8') as f:
+                f.write(base_path_content)
+        
+        print("✅ 配置同步完成！")
+        print("💡 提示：如果同步的 mcp_config.json 包含绝对路径，请手动检查或运行 'ai upgrade'。")
+
+    except Exception as e:
+        print(f"❌ 同步失败: {e}")
+    finally:
+        shutil.rmtree(temp_dir)
+
 def test_connection(driver, key, url, model):
     print(f"\n⏳ 正在验证 {driver} (使用模型 {model})...")
     try:
@@ -734,6 +798,9 @@ async def main():
     elif cmd == "upgrade": upgrade_tool()
     elif cmd == "uninstall": uninstall_tool()
     elif cmd == "delete": delete_provider_or_api()
+    elif cmd == "download":
+        if len(full_args) > 1: download_config(full_args[1])
+        else: print("用法: ai download [Git 仓库 URL]")
     elif cmd == "workspace":
         if len(full_args) > 1: set_workspace(full_args[1])
         else: print(f"当前工作区: {get_current_workspace()}")
@@ -774,6 +841,7 @@ AI CLI 是一个全能的命令行 AI 助手，支持工具调用、系统操作
   ai model            管理模型：切换当前模型、查看历史、或为当前目录创建 .ai-config.json
   ai switch           在已配置的供应商之间快速切换
   ai delete           删除不需要的供应商或特定的 API Key
+  ai download [url]   从 Git 仓库下载并覆盖所有配置 (用于多机同步)
   ai status           查看当前生效的供应商、模型及工作区路径
   ai workspace [path] 设置 AI 的活动范围（影响文件系统工具的访问权限）
 
