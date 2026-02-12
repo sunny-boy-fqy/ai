@@ -14,14 +14,16 @@ echo "=== 🤖 AI CLI Installation/Update ==="
 # 1. 检查并安装系统依赖
 check_dependencies() {
     local missing_deps=()
-    for cmd in git python3 curl; do
-        if ! command -v $cmd &> /dev/null; then
-            missing_deps+=($cmd)
-        fi
-    done
+    echo "正在检查系统环境..."
 
-    # 检查 python3-venv (Debian/Ubuntu 特有)
-    if command -v python3 &> /dev/null; then
+    if ! command -v curl &> /dev/null; then missing_deps+=("curl"); fi
+    if ! command -v git &> /dev/null; then missing_deps+=("git"); fi
+
+    # 检查 python3
+    if ! command -v python3 &> /dev/null; then
+        missing_deps+=("python3")
+    else
+        # 检查 venv 模块是否可用 (Debian/Ubuntu 经常将其拆分)
         if ! python3 -m venv --help &> /dev/null; then
             missing_deps+=("python3-venv")
         fi
@@ -30,11 +32,23 @@ check_dependencies() {
     if [ ${#missing_deps[@]} -ne 0 ]; then
         echo "检测到缺失依赖: ${missing_deps[*]}"
         if command -v apt &> /dev/null; then
-            echo "尝试使用 sudo apt 安装依赖..."
+            echo "尝试使用 sudo apt 自动安装依赖 (可能需要输入密码)..."
             sudo apt update
-            sudo apt install -y git python3 python3-venv curl
+            sudo apt install -y git python3 python3-venv curl python3-pip
+        elif command -v dnf &> /dev/null; then
+            echo "尝试使用 sudo dnf 自动安装依赖..."
+            sudo dnf install -y git python3 curl
+        elif command -v pacman &> /dev/null; then
+            echo "尝试使用 sudo pacman 自动安装依赖..."
+            sudo pacman -S --noconfirm git python curl
         else
-            echo "❌ 无法自动安装依赖。请手动安装: ${missing_deps[*]}"
+            echo "❌ 无法自动为您的系统安装依赖。请手动安装: ${missing_deps[*]}"
+            exit 1
+        fi
+        
+        # 再次检查
+        if ! command -v python3 &> /dev/null || ! python3 -m venv --help &> /dev/null; then
+            echo "❌ 依赖安装失败，请手动解决 Python3 环境问题后再运行。"
             exit 1
         fi
     fi

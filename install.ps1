@@ -9,18 +9,38 @@ $VENV_PATH = "$CONFIG_DIR\python_venv"
 Write-Host "=== 🤖 AI CLI Installation/Update (Windows) ===" -ForegroundColor Cyan
 
 # 1. Check Dependencies
-function Check-Command($cmd) {
-    Get-Command $cmd -ErrorAction SilentlyContinue
+function Check-Python {
+    if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
+        Write-Host "⚠️  未检测到 Python。" -ForegroundColor Yellow
+        $useWinget = Read-Host "是否尝试通过 winget 自动安装 Python 3? (y/n)"
+        if ($useWinget -eq "y") {
+            if (Get-Command "winget" -ErrorAction SilentlyContinue) {
+                Write-Host "正在通过 winget 安装 Python..."
+                winget install Python.Python.3
+                Write-Host "✅ Python 安装指令已发送，请在安装完成后重新启动此脚本。" -ForegroundColor Cyan
+                exit
+            } else {
+                Write-Host "❌ 未找到 winget。请访问 https://www.python.org/ 下载并安装 Python 3 (记得勾选 'Add Python to PATH')。" -ForegroundColor Red
+                exit 1
+            }
+        } else {
+            exit 1
+        }
+    }
+    
+    # Check venv
+    try {
+        python -m venv --help | Out-Null
+    } catch {
+        Write-Host "❌ Python 环境不完整（缺少 venv 模块）。请重新安装 Python 并确保勾选了相关组件。" -ForegroundColor Red
+        exit 1
+    }
 }
+
+Check-Python
 
 if (-not (Check-Command "git")) {
-    Write-Host "❌ git not found. Please install git." -ForegroundColor Red
-    exit 1
-}
-
-if (-not (Check-Command "python")) {
-    Write-Host "❌ python not found. Please install Python 3." -ForegroundColor Red
-    exit 1
+    Write-Host "ℹ️ 未检测到 git，将使用 ZIP 下载模式。" -ForegroundColor Yellow
 }
 
 # 2. Directory Setup
