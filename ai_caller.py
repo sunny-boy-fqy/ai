@@ -520,7 +520,13 @@ def delete_provider_or_api():
 
 def download_config(repo_url):
     import tempfile
+    import stat
     print(f"⏳ 正在从 {repo_url} 同步配置...")
+
+    def remove_readonly(func, path, _):
+        """让 shutil.rmtree 能够删除只读文件"""
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
     
     # 1. 备份关键的机器特定配置 (安装路径)
     base_path_cfg = os.path.join(CONFIG_DIR, 'base_path.config')
@@ -541,7 +547,7 @@ def download_config(repo_url):
         # 移除克隆下来的 .git 目录
         git_dir = os.path.join(temp_dir, ".git")
         if os.path.exists(git_dir):
-            shutil.rmtree(git_dir)
+            shutil.rmtree(git_dir, onexc=remove_readonly)
 
         # 3. 确认覆盖
         confirm = input(f"⚠️  确定要使用下载的内容覆盖 {CONFIG_DIR} 吗？当前所有 API Key 和设置将丢失。(y/N): ").lower()
@@ -550,15 +556,17 @@ def download_config(repo_url):
             return
 
         # 4. 执行覆盖
-        # 移除旧目录（除了一些正在使用的可能导致锁定的文件，但通常配置目录没问题）
         for item in os.listdir(CONFIG_DIR):
             item_path = os.path.join(CONFIG_DIR, item)
-            if item == "python_venv" or item == "node": # 保留本地运行环境，只覆盖配置
+            if item in ["python_venv", "node"]: # 保留本地运行环境
                 continue
-            if os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-            else:
-                os.remove(item_path)
+            try:
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path, onexc=remove_readonly)
+                else:
+                    os.remove(item_path)
+            except Exception as e:
+                print(f"⚠️  无法删除 {item}: {e}")
         
         # 拷贝新内容
         for item in os.listdir(temp_dir):
@@ -569,18 +577,18 @@ def download_config(repo_url):
             else:
                 shutil.copy2(s, d)
         
-        # 5. 还原 base_path.config (确保工具能找到源码)
+        # 5. 还原 base_path.config
         if base_path_content:
             with open(base_path_cfg, 'w', encoding='utf-8') as f:
                 f.write(base_path_content)
         
         print("✅ 配置同步完成！")
-        print("💡 提示：如果同步的 mcp_config.json 包含绝对路径，请手动检查或运行 'ai upgrade'。")
 
     except Exception as e:
         print(f"❌ 同步失败: {e}")
     finally:
-        shutil.rmtree(temp_dir)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, onexc=remove_readonly)
 
 def test_connection(driver, key, url, model):
     print(f"\n⏳ 正在验证 {driver} (使用模型 {model})...")
