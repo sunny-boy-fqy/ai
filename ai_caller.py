@@ -552,16 +552,24 @@ def download_config(repo_url):
 
     print(f"⏳ 正在从 {repo_url} 同步配置...")
 
-    # 禁用 Git 交互式提示，防止弹出用户名密码输入
+    # 禁用 Git 交互式提示
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    # 核心修复：添加 UserKnownHostsFile=/dev/null 彻底避免因中文路径无法创建 .ssh 目录的问题
-    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     
+    # 核心修复：显式寻找私钥
+    ssh_key_options = ""
     if IS_WINDOWS:
-        # 在 Windows 下确保 HOME 变量指向正确的用户目录，帮助 SSH 找到密钥
-        if "USERPROFILE" in env:
-            env["HOME"] = env["USERPROFILE"]
+        # 在 Windows 下手动定位私钥，避免 OpenSSH 的路径编码 Bug
+        ssh_dir = os.path.join(os.environ.get("USERPROFILE", ""), ".ssh")
+        possible_keys = ["id_rsa", "id_ed25519", "id_ecdsa"]
+        for key in possible_keys:
+            key_path = os.path.join(ssh_dir, key)
+            if os.path.exists(key_path):
+                # 使用双斜杠或 Windows 风格路径，并用引号包裹
+                ssh_key_options = f'-i "{key_path}"'
+                break
+    
+    env["GIT_SSH_COMMAND"] = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {ssh_key_options}"
 
     def remove_readonly(func, path, _):
         os.chmod(path, stat.S_IWRITE)
@@ -642,12 +650,18 @@ def upload_config(repo_url):
     # 禁用所有交互式提示
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    # 核心修复：添加 UserKnownHostsFile=/dev/null 彻底避免因中文路径无法创建 .ssh 目录的问题
-    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
+    
+    ssh_key_options = ""
     if IS_WINDOWS:
-        if "USERPROFILE" in env:
-            env["HOME"] = env["USERPROFILE"]
+        ssh_dir = os.path.join(os.environ.get("USERPROFILE", ""), ".ssh")
+        possible_keys = ["id_rsa", "id_ed25519", "id_ecdsa"]
+        for key in possible_keys:
+            key_path = os.path.join(ssh_dir, key)
+            if os.path.exists(key_path):
+                ssh_key_options = f'-i "{key_path}"'
+                break
+
+    env["GIT_SSH_COMMAND"] = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {ssh_key_options}"
 
     def remove_readonly(func, path, _):
         os.chmod(path, stat.S_IWRITE)
