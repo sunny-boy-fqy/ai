@@ -29,16 +29,16 @@ if (-not (Check-Command "python")) {
 # 2. Directory Setup
 $DEFAULT_DIR = "$HOME\ai"
 if (Test-Path "$CONFIG_DIR\base_path.config") {
-    $DEFAULT_DIR = Get-Content "$CONFIG_DIR\base_path.config" | Select-Object -First 1
+    $DEFAULT_DIR = Get-Content "$CONFIG_DIR\base_path.config" -Raw -Encoding utf8 | Select-Object -First 1
 }
 $TARGET_DIR = Read-Host "Input install path [Default: $DEFAULT_DIR]"
 if ([string]::IsNullOrWhiteSpace($TARGET_DIR)) { $TARGET_DIR = $DEFAULT_DIR }
 $TARGET_DIR = $TARGET_DIR.Trim().Trim('"')
 
-if (-not (Test-Path $TARGET_DIR)) { mkdir $TARGET_DIR | Out-Null }
+if (-not (Test-Path "$TARGET_DIR")) { mkdir "$TARGET_DIR" | Out-Null }
 
 # 3. Node.js Local Setup
-if (-not (Test-Path $CONFIG_DIR)) { mkdir $CONFIG_DIR | Out-Null }
+if (-not (Test-Path "$CONFIG_DIR")) { mkdir "$CONFIG_DIR" | Out-Null }
 $NODE_LOCAL_DIR = "$CONFIG_DIR\node"
 if (-not (Test-Path "$NODE_LOCAL_DIR\node.exe")) {
     Write-Host "Installing private Node.js..." -ForegroundColor Cyan
@@ -46,9 +46,9 @@ if (-not (Test-Path "$NODE_LOCAL_DIR\node.exe")) {
     $TEMP_ZIP = "$env:TEMP\node.zip"
     Invoke-WebRequest -Uri $NODE_URL -OutFile $TEMP_ZIP
     Expand-Archive -Path $TEMP_ZIP -DestinationPath "$env:TEMP\node-temp" -Force
-    if (-not (Test-Path $NODE_LOCAL_DIR)) { mkdir $NODE_LOCAL_DIR | Out-Null }
+    if (-not (Test-Path "$NODE_LOCAL_DIR")) { mkdir "$NODE_LOCAL_DIR" | Out-Null }
     $extracted = Get-ChildItem -Path "$env:TEMP\node-temp" -Directory | Select-Object -First 1
-    Copy-Item -Path "$($extracted.FullName)\*" -Destination $NODE_LOCAL_DIR -Recurse -Force
+    Copy-Item -Path "$($extracted.FullName)\*" -Destination "$NODE_LOCAL_DIR" -Recurse -Force
     Remove-Item $TEMP_ZIP -Force
     Remove-Item "$env:TEMP\node-temp" -Recurse -Force
 }
@@ -65,7 +65,7 @@ if (-not (Test-Path "$TARGET_DIR\.git")) {
         $extractedDir = Get-ChildItem -Path "$env:TEMP\ai-temp" -Directory | Select-Object -First 1
         Copy-Item -Path "$($extractedDir.FullName)\*" -Destination "$TARGET_DIR" -Recurse -Force
         Remove-Item $zipPath -Force
-        Remove-Item "$env:TEMP\ai-temp" -Recurse -Force
+        Remove-Item "$env:TEMP\node-temp" -Recurse -Force
     }
 } else {
     if (Check-Command "git") {
@@ -75,23 +75,33 @@ if (-not (Test-Path "$TARGET_DIR\.git")) {
 }
 
 # 5. Save Config
-if (-not (Test-Path $USER_AI_DIR)) { mkdir $USER_AI_DIR | Out-Null }
-if (-not (Test-Path $MCP_SERVERS_DIR)) { mkdir $MCP_SERVERS_DIR | Out-Null }
+if (-not (Test-Path "$USER_AI_DIR")) { mkdir "$USER_AI_DIR" | Out-Null }
+if (-not (Test-Path "$MCP_SERVERS_DIR")) { mkdir "$MCP_SERVERS_DIR" | Out-Null }
 $TARGET_DIR | Out-File -FilePath "$CONFIG_DIR\base_path.config" -Encoding UTF8 -NoNewline
 
 # 6. Environment Setup
-if (-not (Test-Path $VENV_PATH)) { python -m venv $VENV_PATH }
-& "$VENV_PATH\Scripts\pip.exe" install --upgrade pip
-& "$VENV_PATH\Scripts\pip.exe" install openai zhipuai groq beautifulsoup4 ebooklib httpx PyJWT tqdm pydantic lxml requests mcp ddgs duckduckgo_search
+if (-not (Test-Path "$VENV_PATH")) { 
+    Write-Host "Creating Virtual Environment..."
+    python -m venv "$VENV_PATH" 
+}
+$VENV_PIP = Join-Path $VENV_PATH "Scripts\pip.exe"
+if (Test-Path "$VENV_PIP") {
+    & "$VENV_PIP" install --upgrade pip
+    & "$VENV_PIP" install openai zhipuai groq beautifulsoup4 ebooklib httpx PyJWT tqdm pydantic lxml requests mcp ddgs duckduckgo_search
+} else {
+    Write-Host "Error: Virtual environment creation failed. pip.exe not found." -ForegroundColor Red
+    exit 1
+}
 
 # 7. MCP Config
 $MCP_CONFIG_PATH = "$CONFIG_DIR\mcp_config.json"
-if (-not (Test-Path $MCP_CONFIG_PATH)) {
+if (-not (Test-Path "$MCP_CONFIG_PATH")) {
+    $VENV_PYTHON = Join-Path $VENV_PATH "Scripts\python.exe"
     $mcp_content = @"
 {
   "servers": {
     "filesystem": { "command": "$LOCAL_NPX", "args": ["-y", "@modelcontextprotocol/server-filesystem"], "type": "stdio" },
-    "web-search": { "command": "$VENV_PATH\Scripts\python.exe", "args": ["$MCP_SERVERS_DIR\web_search_server.py"], "type": "stdio" }
+    "web-search": { "command": "$VENV_PYTHON", "args": ["$MCP_SERVERS_DIR\web_search_server.py"], "type": "stdio" }
   }
 }
 "@

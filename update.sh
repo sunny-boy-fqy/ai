@@ -23,11 +23,17 @@ if [ -z "$commit_msg" ]; then
     commit_msg="Update AI tool"
 fi
 
+# Prompt for branch
+read -p "Enter target branch (default: 'dev'): " target_branch
+if [ -z "$target_branch" ]; then
+    target_branch="dev"
+fi
+
 # Commit
 git commit -m "$commit_msg"
 
-# Push to main
-echo "Pushing tool updates to GitHub (main branch)..."
-git push origin main
+# Push
+echo "Pushing tool updates to GitHub ($target_branch branch)..."
+git push origin "$target_branch"
 
 echo "Tool update complete."

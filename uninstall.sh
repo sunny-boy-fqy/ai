@@ -1,51 +1,46 @@
 #!/bin/bash
 
-# AI Tool Uninstallation Script
+# AI Tool Deep Uninstallation Script (Linux)
 
 CONFIG_DIR="$HOME/.config/ai"
 USER_AI_DIR="$HOME/.ai"
 BASHRC="$HOME/.bashrc"
 
-echo "=== 🗑️  AI CLI Uninstallation ==="
-
-# 1. Remove Alias
-echo "Removing alias from .bashrc..."
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' '/# AI Shortcut/d' "$BASHRC"
-    sed -i '' "/alias ai='.*ai_run.sh'/d" "$BASHRC"
-else
-    sed -i '/# AI Shortcut/d' "$BASHRC"
-    sed -i "/alias ai='.*ai_run.sh'/d" "$BASHRC"
+# 1. Self-cloning logic
+if [[ "$0" != "/tmp/"* ]]; then
+    TMP_DIR="/tmp/ai_cleanup_$(date +%s)"
+    mkdir -p "$TMP_DIR"
+    cp "$0" "$TMP_DIR/uninstall.sh"
+    chmod +x "$TMP_DIR/uninstall.sh"
+    echo "⏳ Moving to temporary environment for deep cleanup..."
+    exec "$TMP_DIR/uninstall.sh" "$@"
+    exit
 fi
 
-# 2. Optional: Remove Configuration
-read -p "Do you want to keep your configuration and API keys? (y/n): " keep_config
+echo "=== 🗑️ AI CLI Deep Uninstallation ==="
 
-if [[ "$keep_config" =~ ^[Nn]$ ]]; then
-    echo "Removing configuration and data..."
-    rm -rf "$CONFIG_DIR"
-    rm -rf "$USER_AI_DIR"
-    echo "Configuration removed."
-else
-    echo "Configuration preserved in $CONFIG_DIR"
-fi
+# 2. Kill processes
+echo "🛑 Stopping AI processes..."
+pkill -9 -f "ai_caller.py" 2>/dev/null
+pkill -9 -f "ai_run.sh" 2>/dev/null
+pkill -9 -f "\.config/ai/node" 2>/dev/null
 
-# 3. Remove Code
+# 3. Resolve TARGET_DIR
 if [ -f "$CONFIG_DIR/base_path.config" ]; then
-    ACTUAL_TARGET_DIR=$(cat "$CONFIG_DIR/base_path.config")
+    TARGET_DIR=$(cat "$CONFIG_DIR/base_path.config")
 else
-    ACTUAL_TARGET_DIR="$HOME/ai"
+    TARGET_DIR="$HOME/ai"
 fi
 
-read -p "Do you want to remove the AI tool source code directory ($ACTUAL_TARGET_DIR)? (y/n): " remove_code
-if [[ "$remove_code" =~ ^[Yy]$ ]]; then
-    echo "Cleaning source code directory..."
-    # To be safe, we delete everything except the current script to avoid "file in use" style issues
-    # although less common on Linux.
-    find "$ACTUAL_TARGET_DIR" -mindepth 1 -maxdepth 1 ! -name "uninstall.sh" ! -name "uninstall.ps1" -exec rm -rf {} +
-    echo "Source code cleaned. You can manually delete the folder '$ACTUAL_TARGET_DIR' later."
-fi
+# 4. Remove Files
+echo "📁 Deleting folders..."
+rm -rf "$CONFIG_DIR"
+rm -rf "$USER_AI_DIR"
+rm -rf "$TARGET_DIR"
 
-echo -e "
-✅ Uninstallation Complete!"
-echo "Please run: source ~/.bashrc"
+# 5. Clean PATH/Alias
+echo "🔗 Cleaning .bashrc..."
+sed -i '/# AI Shortcut/d' "$BASHRC" 2>/dev/null
+sed -i "/alias ai='.*ai_run.sh'/d" "$BASHRC" 2>/dev/null
+
+echo -e "\n✅ Uninstallation complete. Please run: source ~/.bashrc"

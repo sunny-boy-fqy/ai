@@ -571,8 +571,11 @@ def download_config(repo_url):
     base_path_cfg = os.path.join(CONFIG_DIR, 'base_path.config')
     base_path_content = None
     if os.path.exists(base_path_cfg):
-        with open(base_path_cfg, 'r', encoding='utf-8') as f:
-            base_path_content = f.read()
+        try:
+            with open(base_path_cfg, 'r', encoding='utf-8-sig') as f:
+                base_path_content = f.read()
+        except:
+            pass
     
     temp_dir = tempfile.mkdtemp()
     try:
