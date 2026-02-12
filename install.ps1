@@ -44,7 +44,7 @@ if (-not (Check-Command "git")) {
 }
 
 # 2. Directory Setup
-$DEFAULT_DIR = "$HOME\.ai"
+$DEFAULT_DIR = "$HOME\ai"
 $TARGET_DIR = Read-Host "请输入安装路径 [默认: $DEFAULT_DIR]"
 if ([string]::IsNullOrWhiteSpace($TARGET_DIR)) { $TARGET_DIR = $DEFAULT_DIR }
 
@@ -53,7 +53,27 @@ if (-not (Test-Path $TARGET_DIR)) {
     mkdir $TARGET_DIR | Out-Null
 }
 
-if (-not (Test-Path "$TARGET_DIR\.git")) {
+$NODE_LOCAL_DIR = "$CONFIG_DIR\node"
+if (-not (Test-Path "$NODE_LOCAL_DIR\node.exe")) {
+    Write-Host "正在安装私有 Node.js 运行环境 (零污染)..." -ForegroundColor Cyan
+    $NODE_VERSION = "v20.11.1"
+    $NODE_URL = "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-win-x64.zip"
+    $TEMP_ZIP = "$env:TEMP\node.zip"
+    
+    Invoke-WebRequest -Uri $NODE_URL -OutFile $TEMP_ZIP
+    Expand-Archive -Path $TEMP_ZIP -DestinationPath "$env:TEMP\node-temp" -Force
+    
+    if (-not (Test-Path $NODE_LOCAL_DIR)) { mkdir $NODE_LOCAL_DIR | Out-Null }
+    $extracted = Get-ChildItem -Path "$env:TEMP\node-temp" -Directory | Select-Object -First 1
+    Copy-Item -Path "$($extracted.FullName)\*" -Destination $NODE_LOCAL_DIR -Recurse -Force
+    
+    Remove-Item $TEMP_ZIP -Force
+    Remove-Item "$env:TEMP\node-temp" -Recurse -Force
+    Write-Host "✅ 本地 Node.js 安装完成。" -ForegroundColor Green
+}
+
+$LOCAL_NODE = "$NODE_LOCAL_DIR\node.exe"
+$LOCAL_NPX = "$NODE_LOCAL_DIR\npx.cmd"
     if (Check-Command "git") {
         Write-Host "Cloning repository via git..."
         git clone https://github.com/sunny-boy-fqy/ai.git $TARGET_DIR
@@ -117,7 +137,7 @@ if (-not (Test-Path $MCP_CONFIG_PATH)) {
 {
   "servers": {
     "filesystem": {
-      "command": "npx.cmd",
+      "command": "$LOCAL_NPX",
       "args": ["-y", "@modelcontextprotocol/server-filesystem"],
       "type": "stdio"
     },
