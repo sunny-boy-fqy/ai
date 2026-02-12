@@ -23,8 +23,8 @@ irm https://raw.githubusercontent.com/sunny-boy-fqy/ai/main/install.ps1 | iex
 2.  **私有 Node.js**: 自动下载绿色版 Node.js 到 `~/.config/ai/node`。**不会修改系统 PATH**，不影响系统已有的 Node 环境。
 3.  **Python 虚拟环境**: 自动在 `~/.config/ai/python_venv` 创建隔离环境。
 
-### 必须环境
-*   **Python 3.8+**: 如果您的系统没有 Python，Linux 脚本会尝试自动安装，Windows 脚本会引导安装。
+### 推荐环境 (可选)
+*   **Git**: **非必须**。如果有 Git，安装程序会克隆仓库以便于后续 `ai upgrade` 自动更新；如果没有 Git，安装程序会自动下载并解压 ZIP 压缩包。
 *   **curl**: 用于下载必要的组件。如果您的系统没有 curl：
     *   **Linux (Debian/Ubuntu)**: `sudo apt install curl`
     *   **Linux (CentOS/Fedora)**: `sudo dnf install curl`
