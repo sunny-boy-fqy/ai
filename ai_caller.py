@@ -555,8 +555,13 @@ def download_config(repo_url):
     # 禁用 Git 交互式提示，防止弹出用户名密码输入
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    # 核心修复：添加 StrictHostKeyChecking=no 自动接受主机指纹
-    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+    # 核心修复：添加 UserKnownHostsFile=/dev/null 彻底避免因中文路径无法创建 .ssh 目录的问题
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    
+    if IS_WINDOWS:
+        # 在 Windows 下确保 HOME 变量指向正确的用户目录，帮助 SSH 找到密钥
+        if "USERPROFILE" in env:
+            env["HOME"] = env["USERPROFILE"]
 
     def remove_readonly(func, path, _):
         os.chmod(path, stat.S_IWRITE)
@@ -637,8 +642,12 @@ def upload_config(repo_url):
     # 禁用所有交互式提示
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    # 核心修复：添加 StrictHostKeyChecking=no 自动接受主机指纹
-    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+    # 核心修复：添加 UserKnownHostsFile=/dev/null 彻底避免因中文路径无法创建 .ssh 目录的问题
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    if IS_WINDOWS:
+        if "USERPROFILE" in env:
+            env["HOME"] = env["USERPROFILE"]
 
     def remove_readonly(func, path, _):
         os.chmod(path, stat.S_IWRITE)
