@@ -31,18 +31,19 @@ else
 fi
 
 # 3. Remove Code
-CONFIG_DIR="$HOME/.config/ai"
 if [ -f "$CONFIG_DIR/base_path.config" ]; then
     ACTUAL_TARGET_DIR=$(cat "$CONFIG_DIR/base_path.config")
 else
-    ACTUAL_TARGET_DIR="$HOME/.ai"
+    ACTUAL_TARGET_DIR="$HOME/ai"
 fi
 
 read -p "Do you want to remove the AI tool source code directory ($ACTUAL_TARGET_DIR)? (y/n): " remove_code
 if [[ "$remove_code" =~ ^[Yy]$ ]]; then
-    echo "Removing source code..."
-    rm -rf "$ACTUAL_TARGET_DIR"
-    echo "Source code removed."
+    echo "Cleaning source code directory..."
+    # To be safe, we delete everything except the current script to avoid "file in use" style issues
+    # although less common on Linux.
+    find "$ACTUAL_TARGET_DIR" -mindepth 1 -maxdepth 1 ! -name "uninstall.sh" ! -name "uninstall.ps1" -exec rm -rf {} +
+    echo "Source code cleaned. You can manually delete the folder '$ACTUAL_TARGET_DIR' later."
 fi
 
 echo -e "

@@ -23,19 +23,24 @@ if ($CurrentPath -like "*$TARGET_DIR*") {
 }
 
 # 2. Delete Directories
-Write-Host "Deleting configuration directory $CONFIG_DIR ..."
-if (Test-Path $CONFIG_DIR) {
-    Remove-Item -Path $CONFIG_DIR -Recurse -Force
-    Write-Host "✅ Deleted $CONFIG_DIR" -ForegroundColor Green
+Write-Host "Deleting configuration directory $CONFIG_DIR ..." -ForegroundColor Cyan
+if (Test-Path "$CONFIG_DIR") {
+    Remove-Item -Path "$CONFIG_DIR" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "✅ Deleted config dir." -ForegroundColor Green
 }
 
-Write-Host "Deleting tool directory $TARGET_DIR ..."
-if (Test-Path $TARGET_DIR) {
-    # We might be running from this directory, so we should be careful.
-    # But usually, it's fine as long as the files aren't locked.
-    Remove-Item -Path $TARGET_DIR -Recurse -Force
-    Write-Host "✅ Deleted $TARGET_DIR" -ForegroundColor Green
+Write-Host "Deleting tool directory contents at $TARGET_DIR ..." -ForegroundColor Cyan
+if (Test-Path "$TARGET_DIR") {
+    # We cannot delete the folder itself because the script is running inside it.
+    # We will delete everything EXCEPT the script itself and the .sh version.
+    $currentScript = $MyInvocation.MyCommand.Path
+    Get-ChildItem -Path "$TARGET_DIR" | Where-Object { $_.FullName -ne $currentScript -and $_.Name -ne "uninstall.sh" } | ForEach-Object {
+        try {
+            Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    Write-Host "✅ Cleaned most of the tool directory." -ForegroundColor Green
+    Write-Host "ℹ️ Please manually delete the folder '$TARGET_DIR' after closing this terminal." -ForegroundColor Yellow
 }
 
-Write-Host "`n✅ Uninstallation complete!" -ForegroundColor Green
-Write-Host "Please restart your terminal."
+Write-Host "`n✅ Uninstallation tasks completed!" -ForegroundColor Green
