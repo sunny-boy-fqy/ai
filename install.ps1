@@ -23,7 +23,11 @@ if (-not (Check-Command "python")) {
     exit 1
 }
 
-# 2. Directory Setup & Download
+# 2. Directory Setup
+$DEFAULT_DIR = "$HOME\.ai"
+$TARGET_DIR = Read-Host "请输入安装路径 [默认: $DEFAULT_DIR]"
+if ([string]::IsNullOrWhiteSpace($TARGET_DIR)) { $TARGET_DIR = $DEFAULT_DIR }
+
 if (-not (Test-Path $TARGET_DIR)) {
     Write-Host "Creating target directory $TARGET_DIR ..."
     mkdir $TARGET_DIR | Out-Null

@@ -330,7 +330,7 @@ async def chat_completion_with_tools(client, model, messages, tools, mcp_manager
 
 # --- CLI Handlers ---
 
-async def start_chat(yolo_mode=False):
+async def start_chat(yolo_mode=False, file_paths=None):
     cfg = get_contextual_config()
     p = cfg.get("current_provider")
     if not p: return print("尚未初始化，请输入 'ai new'")
@@ -366,11 +366,33 @@ async def start_chat(yolo_mode=False):
     prefix = "[LOCAL] " if cfg.get("is_local") else ""
     print(f"💬 {prefix}进入对话模式 [{p} | {m}] (Workspace: {cfg.get('workspace')})\n")
     if yolo_mode: print("⚠️  YOLO 模式已开启: AI 可以直接运行 Shell 命令！")
+    print("💡 提示: 输入 'exit' 退出, 'clear' 清空, '\"\"\"' 开启/结束多行输入。")
+
+    if file_paths:
+        for fp in file_paths:
+            if os.path.exists(fp):
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                messages.append({"role": "user", "content": f"已上传文件 {os.path.basename(fp)}:\n{content}"})
+                print(f"📎 已载入文件: {fp}")
 
     while True:
         try:
-            user_input = input("You > ").strip()
-            if not user_input: continue
+            user_input = ""
+            line = input("You > ").strip()
+            if not line: continue
+            
+            if line == '"""':
+                print("📝 [多行模式] 输入 '\"\"\"' 结束并发送。")
+                lines = []
+                while True:
+                    l = input("... ")
+                    if l.strip() == '"""': break
+                    lines.append(l)
+                user_input = "\n".join(lines)
+            else:
+                user_input = line
+
             if user_input.lower() in ["exit", "quit"]: break
             if user_input.lower() == "clear":
                 messages = [{"role": "system", "content": system_prompt}]
@@ -388,7 +410,7 @@ async def start_chat(yolo_mode=False):
         except Exception as e:
             print(f"\n❌ 失败: {e}")
 
-async def call_ai(args, yolo_mode=False):
+async def call_ai(args, yolo_mode=False, file_paths=None):
     quiet = False
     if args and args[0] in ["-q", "--quiet"]:
         quiet = True
@@ -408,6 +430,13 @@ async def call_ai(args, yolo_mode=False):
     with open(os.path.join(p_dir, keys[0]), "r") as f: kv = f.read().strip()
     
     prompt = " ".join(args)
+    if file_paths:
+        for fp in file_paths:
+            if os.path.exists(fp):
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                prompt += f"\n\n[文件内容 {os.path.basename(fp)}]:\n{content}"
+
     mcp_manager, tools, system_prompt = await get_mcp_context(yolo_mode=yolo_mode)
     
     if not quiet:
@@ -440,6 +469,54 @@ async def call_ai(args, yolo_mode=False):
 def get_provider_dirs():
     if not os.path.exists(CONFIG_DIR): return []
     return sorted([d for d in os.listdir(CONFIG_DIR) if os.path.isdir(os.path.join(CONFIG_DIR, d)) and d not in ["python_venv", ".git", "mcp_servers"]])
+
+def delete_provider_or_api():
+    cfg = load_config()
+    print("\n=== 🗑️  删除供应商或 API Key ===")
+    providers = get_provider_dirs()
+    if not providers: return print("❌ 无供应商配置。")
+    
+    for i, p in enumerate(providers):
+        p_dir = os.path.join(CONFIG_DIR, p)
+        keys = [f for f in os.listdir(p_dir) if f.startswith("api")]
+        print(f"{i+1}. {p} ({len(keys)} 个 Key)")
+    
+    idx = input("\n请选择要管理的供应商编号 (输入 c 取消): ").strip()
+    if idx.lower() == 'c': return
+    try:
+        p_name = providers[int(idx)-1]
+    except: return print("❌ 无效编号。")
+    
+    print(f"\n供应商: {p_name}")
+    print("1. [删除整个供应商]")
+    print("2. [删除特定的 API Key]")
+    mode = input("请选择: ").strip()
+    
+    p_dir = os.path.join(CONFIG_DIR, p_name)
+    if mode == "1":
+        confirm = input(f"⚠️ 确定要删除 '{p_name}' 及其所有配置吗？(y/N): ").lower()
+        if confirm == 'y':
+            shutil.rmtree(p_dir)
+            if cfg.get("current_provider") == p_name: cfg["current_provider"] = ""
+            if p_name in cfg.get("provider_settings", {}): del cfg["provider_settings"][p_name]
+            if p_name in cfg.get("base_urls", {}): del cfg["base_urls"][p_name]
+            save_config(cfg)
+            print(f"✅ 供应商 '{p_name}' 已删除。")
+    elif mode == "2":
+        keys = sorted([f for f in os.listdir(p_dir) if f.startswith("api")])
+        for i, k in enumerate(keys):
+            with open(os.path.join(p_dir, k), "r") as f: val = f.read().strip()
+            print(f"{i+1}. {k} (Key: {val[:8]}...{val[-4:]})")
+        k_idx = input("请选择要删除的 Key 编号: ").strip()
+        try:
+            target_k = keys[int(k_idx)-1]
+            os.remove(os.path.join(p_dir, target_k))
+            print(f"✅ API Key '{target_k}' 已删除。")
+            # If no keys left, delete dir
+            if not [f for f in os.listdir(p_dir) if f.startswith("api")]:
+                shutil.rmtree(p_dir)
+                print(f"ℹ️ 由于无可用 Key，供应商 '{p_name}' 已自动移除。")
+        except: print("❌ 无效编号。")
 
 def test_connection(driver, key, url, model):
     print(f"\n⏳ 正在验证 {driver} (使用模型 {model})...")
@@ -574,16 +651,37 @@ def upgrade_tool():
     if IS_WINDOWS:
         install_script = os.path.join(BASE_DIR, "install.ps1")
         if os.path.exists(install_script):
-            # Run PowerShell script
-            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", install_script])
+            # Use shell=True for Windows and ensure we use powershell.exe
+            try:
+                subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", install_script], check=True)
+            except Exception as e:
+                print(f"❌ 更新失败: {e}")
         else:
-            print("❌ 找不到安装脚本 (install.ps1)，请手动更新。")
+            print(f"❌ 找不到安装脚本: {install_script}")
     else:
         install_script = os.path.join(BASE_DIR, "install.sh")
         if os.path.exists(install_script):
             subprocess.run(["bash", install_script, "--upgrade"])
         else:
             print("❌ 找不到安装脚本 (install.sh)，请手动更新。")
+
+def uninstall_tool():
+    confirm = input("⚠️  确定要卸载 AI CLI 吗？这将删除所有配置和插件。(y/N): ").lower()
+    if confirm != 'y': return
+    
+    if IS_WINDOWS:
+        uninstall_script = os.path.join(BASE_DIR, "uninstall.ps1")
+        if os.path.exists(uninstall_script):
+            print("⏳ 正在调用 Windows 卸载脚本...")
+            subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", uninstall_script])
+        else:
+            print(f"❌ 找不到卸载脚本: {uninstall_script}")
+    else:
+        uninstall_script = os.path.join(BASE_DIR, "uninstall.sh")
+        if os.path.exists(uninstall_script):
+            subprocess.run(["bash", uninstall_script])
+        else:
+            print("❌ 找不到卸载脚本 (uninstall.sh)。")
 
 def show_status():
     cfg = get_contextual_config()
@@ -602,41 +700,50 @@ def show_status():
 
 async def main():
     parser = argparse.ArgumentParser(description="AI CLI Tool", add_help=False)
-    parser.add_argument("command", nargs="?", help="Subcommand or query")
+    parser.add_argument("command", nargs="*", help="Subcommand or query")
     parser.add_argument("--yolo", action="store_true", help="Enable shell command execution")
     parser.add_argument("--version", action="store_true", help="Show version")
     parser.add_argument("-h", "--help", action="store_true", help="Show help")
+    parser.add_argument("-f", "--file", action="append", help="Upload file(s)")
     
-    args = sys.argv[1:]
-    yolo_mode = False
-    if "--yolo" in args:
-        yolo_mode = True
-        args.remove("--yolo")
+    args_namespace, unknown = parser.parse_known_args()
     
-    if "--version" in args:
+    yolo_mode = args_namespace.yolo
+    file_paths = args_namespace.file
+    
+    if args_namespace.version:
         print(f"AI CLI {get_version()}")
         return
 
-    if not args or args[0] in ["-h", "--help"]:
+    if args_namespace.help or (not args_namespace.command and not unknown):
         show_help()
         return
 
-    cmd = args[0].lower()
+    # Handle cases where command is mixed with query
+    full_args = args_namespace.command + unknown
+    if not full_args:
+        show_help()
+        return
+        
+    cmd = full_args[0].lower()
     
     if cmd == "new": setup_new_api()
-    elif cmd == "chat": await start_chat(yolo_mode=yolo_mode)
+    elif cmd == "chat": await start_chat(yolo_mode=yolo_mode, file_paths=file_paths)
     elif cmd == "model": manage_model()
     elif cmd == "status": show_status()
     elif cmd == "upgrade": upgrade_tool()
+    elif cmd == "uninstall": uninstall_tool()
+    elif cmd == "delete": delete_provider_or_api()
     elif cmd == "workspace":
-        if len(args) > 1: set_workspace(args[1])
+        if len(full_args) > 1: set_workspace(full_args[1])
         else: print(f"当前工作区: {get_current_workspace()}")
     elif cmd == "switch":
         # Simplified switch logic
         cfg = load_config()
         ps = get_provider_dirs()
+        if not ps: return print("❌ 无供应商。")
         for i, p in enumerate(ps): print(f"{i+1}. {p}")
-        idx = input("选择: ").strip()
+        idx = input("选择编号: ").strip()
         try:
             cfg["current_provider"] = ps[int(idx)-1]
             save_config(cfg)
@@ -644,34 +751,41 @@ async def main():
         except: pass
     else:
         # Treat as query
-        await call_ai(args, yolo_mode=yolo_mode)
+        await call_ai(full_args, yolo_mode=yolo_mode, file_paths=file_paths)
 
 def show_help():
     print(f"""
 🤖 AI CLI 工具 {get_version()}
 ================================
+AI CLI 是一个全能的命令行 AI 助手，支持工具调用、系统操作和多模型切换。
+
 基本用法:
-  ai [问题]            快速提问
-  ai chat             进入对话模式
-  ai chat --yolo      进入 YOLO 模式 (允许执行 Shell 命令)
+  ai [问题...]        快速提问（支持连续输入多个词）
+  ai chat             进入交互式对话模式
+  ai chat -f [文件]   带着文件内容进入对话
+
+核心功能:
+  -f, --file [路径]   载入一个或多个文件内容到 prompt 中
+  \"\"\"                 在对话模式下，输入 \"\"\" 开启/结束多段文本输入
+  --yolo              启用 YOLO 模式，允许 AI 直接执行 Shell 命令（仅限 chat 和查询）
 
 配置管理:
-  ai new              添加/配置供应商
-  ai model            切换模型 / 创建本地配置
-  ai switch           切换供应商
-  ai status           显示当前状态 (供应商、模型、工作区)
-  ai workspace [path] 设置工作区 (限制文件访问范围)
+  ai new              添加 API Key 或配置新的供应商 (OpenAI, 智谱, Groq 等)
+  ai model            管理模型：切换当前模型、查看历史、或为当前目录创建 .ai-config.json
+  ai switch           在已配置的供应商之间快速切换
+  ai delete           删除不需要的供应商或特定的 API Key
+  ai status           查看当前生效的供应商、模型及工作区路径
+  ai workspace [path] 设置 AI 的活动范围（影响文件系统工具的访问权限）
 
-系统命令:
-  ai upgrade          更新至最新版本
-  ai --version        显示版本号
+系统维护:
+  ai upgrade          从 GitHub 获取最新代码并自动完成环境升级
+  ai uninstall        一键卸载 AI 工具及其所有配置文件
+  ai --version        显示当前安装的版本号
+  ai -h, --help       显示此帮助信息
 
-高级功能:
-  --yolo              允许 AI 执行系统命令 (慎用!)
-  .ai-config.json     在项目根目录创建此文件可覆盖全局配置
-
-配置存储: ~/.config/ai/
-MCP 服务器: ~/.ai/mcp_servers/
+配置路径:
+  - 核心配置: ~/.config/ai/
+  - MCP 插件: ~/.ai/mcp_servers/
 """)
 
 if __name__ == "__main__":

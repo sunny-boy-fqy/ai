@@ -42,7 +42,14 @@ check_dependencies() {
 
 check_dependencies
 
-# 2. 仓库克隆或下载
+# 2. 确定安装路径
+DEFAULT_DIR="$HOME/.ai"
+read -p "请输入安装路径 [默认: $DEFAULT_DIR]: " INPUT_DIR
+TARGET_DIR=${INPUT_DIR:-$DEFAULT_DIR}
+# 扩展 ~ 路径
+TARGET_DIR="${TARGET_DIR/#\~/$HOME}"
+
+# 3. 仓库克隆或下载
 if [ -d "$TARGET_DIR/.git" ]; then
     REPO_DIR="$TARGET_DIR"
     cd "$REPO_DIR"
@@ -63,8 +70,8 @@ if [ -d "$TARGET_DIR/.git" ]; then
         echo "ℹ️ 仓库已存在但未检测到 git，跳过更新。"
     fi
 else
-    # 如果当前就在 ai 目录内且有核心文件，则不克隆
-    if [ -f "ai_caller.py" ] && [ -f "install.sh" ]; then
+    # 如果当前就在目标目录内且有核心文件，则不克隆
+    if [ -f "ai_caller.py" ] && [ -f "install.sh" ] && [ "$(pwd)" == "$TARGET_DIR" ]; then
         REPO_DIR="$(pwd)"
     else
         if command -v git &> /dev/null; then
@@ -94,7 +101,7 @@ else
     fi
 fi
 
-# 3. 目录设置
+# 4. 目录设置
 echo "确保目录存在..."
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$MCP_SERVERS_DIR"
