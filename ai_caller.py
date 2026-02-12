@@ -826,8 +826,8 @@ def upgrade_tool():
         install_script = os.path.join(BASE_DIR, "install.ps1")
         if os.path.exists(install_script):
             try:
-                # Force double quotes around script path for PowerShell
-                subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", f'"{install_script}"'], check=True)
+                # Python's subprocess handles quoting automatically for list arguments
+                subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", install_script], check=True)
             except Exception as e:
                 print(f"❌ 更新失败: {e}")
         else:
@@ -847,8 +847,8 @@ def uninstall_tool():
         uninstall_script = os.path.join(BASE_DIR, "uninstall.ps1")
         if os.path.exists(uninstall_script):
             print("⏳ 正在调用 Windows 卸载脚本...")
-            # Use quotes for script path
-            subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", f'"{uninstall_script}"'])
+            # Let subprocess handle the quoting
+            subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", uninstall_script])
         else:
             print(f"❌ 找不到卸载脚本: \"{uninstall_script}\"")
     else:
