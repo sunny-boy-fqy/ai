@@ -50,14 +50,6 @@ else:
     VENV_PIP = os.path.join(CONFIG_DIR, "python_venv", "bin", "pip")
     VENV_PYTHON = os.path.join(CONFIG_DIR, "python_venv", "bin", "python3")
 
-CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-if IS_WINDOWS:
-    VENV_PIP = os.path.join(CONFIG_DIR, "python_venv", "Scripts", "pip.exe")
-    VENV_PYTHON = os.path.join(CONFIG_DIR, "python_venv", "Scripts", "python.exe")
-else:
-    VENV_PIP = os.path.join(CONFIG_DIR, "python_venv", "bin", "pip")
-    VENV_PYTHON = os.path.join(CONFIG_DIR, "python_venv", "bin", "python3")
-
 MCP_CONFIG = os.path.join(CONFIG_DIR, "mcp_config.json")
 WORKSPACE_CONFIG = os.path.join(CONFIG_DIR, "workspace.config")
 
@@ -489,7 +481,7 @@ async def call_ai(args, yolo_mode=False, file_paths=None):
 
 def get_provider_dirs():
     if not os.path.exists(CONFIG_DIR): return []
-    return sorted([d for d in os.listdir(CONFIG_DIR) if os.path.isdir(os.path.join(CONFIG_DIR, d)) and d not in ["python_venv", ".git", "mcp_servers"]])
+    return sorted([d for d in os.listdir(CONFIG_DIR) if os.path.isdir(os.path.join(CONFIG_DIR, d)) and d not in ["python_venv", ".git", "mcp_servers", "node"]])
 
 def delete_provider_or_api():
     cfg = load_config()
@@ -550,7 +542,7 @@ def download_config(repo_url):
         confirm = input("确定要继续使用 HTTPS 吗？(y/N): ").lower()
         if confirm != 'y': return
 
-    print(f"⏳ 正在从 {repo_url} 同步配置...")
+    print(f"⏳ 正在从 {repo_url} 合并配置...")
 
     # 禁用 Git 交互式提示
     env = os.environ.copy()
@@ -575,7 +567,12 @@ def download_config(repo_url):
         os.chmod(path, stat.S_IWRITE)
         func(path)
     
-    # ... (备份逻辑保持不变)
+    # 1. 备份关键的机器特定配置 (安装路径)
+    base_path_cfg = os.path.join(CONFIG_DIR, 'base_path.config')
+    base_path_content = None
+    if os.path.exists(base_path_cfg):
+        with open(base_path_cfg, 'r', encoding='utf-8') as f:
+            base_path_content = f.read()
     
     temp_dir = tempfile.mkdtemp()
     try:
@@ -584,51 +581,93 @@ def download_config(repo_url):
         else:
             print("❌ 未检测到 git。")
             return
-# ... (中间拷贝逻辑保持不变)
 
         # 移除克隆下来的 .git 目录
         git_dir = os.path.join(temp_dir, ".git")
         if os.path.exists(git_dir):
             shutil.rmtree(git_dir, onexc=remove_readonly)
 
-        # 3. 确认覆盖
-        confirm = input(f"⚠️  确定要使用下载的内容覆盖 {CONFIG_DIR} 吗？当前所有 API Key 和设置将丢失。(y/N): ").lower()
+        # 3. 确认合并
+        confirm = input(f"⚠️  确定要将下载的内容合并到 {CONFIG_DIR} 吗？(y/N): ").lower()
         if confirm != 'y':
             print("操作已取消。")
             return
 
-        # 4. 执行覆盖
-        for item in os.listdir(CONFIG_DIR):
-            item_path = os.path.join(CONFIG_DIR, item)
-            if item in ["python_venv", "node"]: # 保留本地运行环境
-                continue
-            try:
-                if os.path.isdir(item_path):
-                    shutil.rmtree(item_path, onexc=remove_readonly)
+        # 4. 执行合并逻辑
+        new_config_path = os.path.join(temp_dir, "config.json")
+        if os.path.exists(new_config_path):
+            with open(new_config_path, "r", encoding='utf-8') as f:
+                new_cfg = json.load(f)
+            
+            old_cfg = load_config()
+            # 合并 provider_settings
+            for p, sett in new_cfg.get("provider_settings", {}).items():
+                if p not in old_cfg["provider_settings"]:
+                    old_cfg["provider_settings"][p] = sett
                 else:
-                    os.remove(item_path)
-            except Exception as e:
-                print(f"⚠️  无法删除 {item}: {e}")
-        
-        # 拷贝新内容
-        for item in os.listdir(temp_dir):
-            if item in ["python_venv", "node", ".git"]: # 严格排除环境目录
+                    # 合并模型历史
+                    for m in sett.get("model_history", []):
+                        if m not in old_cfg["provider_settings"][p].get("model_history", []):
+                            old_cfg["provider_settings"][p].setdefault("model_history", []).append(m)
+            
+            # 合并 base_urls
+            for p, url in new_cfg.get("base_urls", {}).items():
+                if p not in old_cfg["base_urls"]:
+                    old_cfg["base_urls"][p] = url
+            
+            save_config(old_cfg)
+            print("✅ 全局配置信息已合并。")
+
+        # 5. 合并供应商目录 (API Keys)
+        for p in os.listdir(temp_dir):
+            p_src = os.path.join(temp_dir, p)
+            if not os.path.isdir(p_src) or p in ["python_venv", "node", ".git", "mcp_servers"]:
                 continue
-            s = os.path.join(temp_dir, item)
-            d = os.path.join(CONFIG_DIR, item)
-            if os.path.isdir(s):
-                shutil.copytree(s, d, dirs_exist_ok=True)
-            else:
-                shutil.copy2(s, d)
-        
-        # 5. 还原 base_path.config
+            
+            p_dst = os.path.join(CONFIG_DIR, p)
+            os.makedirs(p_dst, exist_ok=True)
+            
+            # 获取目标目录现有的 Key 数量，用于编号顺延
+            existing_keys = [f for f in os.listdir(p_dst) if f.startswith("api")]
+            next_idx = len(existing_keys) + 1
+            
+            # 读取源目录中的 Key
+            src_keys = sorted([f for f in os.listdir(p_src) if f.startswith("api")])
+            for k_file in src_keys:
+                with open(os.path.join(p_src, k_file), "r") as f:
+                    k_content = f.read().strip()
+                
+                # 查重：如果已经存在相同的 Key，则跳过
+                is_duplicate = False
+                for ex_k in existing_keys:
+                    with open(os.path.join(p_dst, ex_k), "r") as f:
+                        if f.read().strip() == k_content:
+                            is_duplicate = True
+                            break
+                
+                if not is_duplicate:
+                    new_k_name = f"api_{next_idx}"
+                    with open(os.path.join(p_dst, new_k_name), "w") as f:
+                        f.write(k_content)
+                    print(f"➕ 已为 {p} 添加新 API Key ({new_k_name})")
+                    next_idx += 1
+
+        # 6. 合并 MCP 配置文件 (简单覆盖，因为结构复杂)
+        mcp_src = os.path.join(temp_dir, "mcp_config.json")
+        if os.path.exists(mcp_src):
+            shutil.copy2(mcp_src, os.path.join(CONFIG_DIR, "mcp_config.json"))
+            print("✅ MCP 配置文件已更新。")
+
+        # 7. 还原 base_path.config
         if base_path_content:
             with open(base_path_cfg, 'w', encoding='utf-8') as f:
                 f.write(base_path_content)
-        
-        print("✅ 配置同步完成！")
+
+        print("✅ 配置同步合并完成！")
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"❌ 同步失败: {e}")
     finally:
         if os.path.exists(temp_dir):
@@ -645,7 +684,7 @@ def upload_config(repo_url):
         print("请确保您已在 GitHub 上配置了 SSH Key。")
         return
 
-    print(f"⏳ 正在同步配置到 {repo_url} ...")
+    print(f"⏳ 正在同步配置到 {repo_url} (叠加模式)...")
 
     # 禁用所有交互式提示
     env = os.environ.copy()
@@ -672,44 +711,78 @@ def upload_config(repo_url):
         # 1. 克隆仓库
         subprocess.run(["git", "clone", "--depth", "1", repo_url, temp_dir], env=env, check=True)
 
-        # 2. 清理仓库旧文件 (保留 .git)
-        for item in os.listdir(temp_dir):
-            if item == ".git": continue
-            item_path = os.path.join(temp_dir, item)
-            if os.path.isdir(item_path):
-                shutil.rmtree(item_path, onexc=remove_readonly)
-            else:
-                os.remove(item_path)
+        # 2. 执行合并到临时目录逻辑 (叠加)
+        # 合并 config.json
+        local_cfg = load_config()
+        repo_cfg_path = os.path.join(temp_dir, "config.json")
+        if os.path.exists(repo_cfg_path):
+            with open(repo_cfg_path, "r", encoding='utf-8') as f:
+                repo_cfg = json.load(f)
+            
+            # 将本地的合并到仓库配置中
+            for p, sett in local_cfg.get("provider_settings", {}).items():
+                if p not in repo_cfg["provider_settings"]:
+                    repo_cfg["provider_settings"][p] = sett
+                else:
+                    for m in sett.get("model_history", []):
+                        if m not in repo_cfg["provider_settings"][p].get("model_history", []):
+                            repo_cfg["provider_settings"][p].setdefault("model_history", []).append(m)
+            for p, url in local_cfg.get("base_urls", {}).items():
+                repo_cfg["base_urls"][p] = url
+        else:
+            repo_cfg = local_cfg
+        
+        with open(repo_cfg_path, "w", encoding='utf-8') as f:
+            json.dump(repo_cfg, f, indent=4, ensure_ascii=False)
 
-        # 3. 拷贝本地配置
-        print("📦 正在准备配置文件...")
-        for item in os.listdir(CONFIG_DIR):
-            if item in ["python_venv", "node", ".git", "base_path.config"]:
-                continue
-            s = os.path.join(CONFIG_DIR, item)
-            d = os.path.join(temp_dir, item)
-            if os.path.isdir(s):
-                shutil.copytree(s, d, dirs_exist_ok=True)
-            else:
-                shutil.copy2(s, d)
+        # 合并 API Keys
+        providers = get_provider_dirs()
+        for p in providers:
+            p_src = os.path.join(CONFIG_DIR, p)
+            p_dst = os.path.join(temp_dir, p)
+            os.makedirs(p_dst, exist_ok=True)
+            
+            existing_keys_in_repo = [f for f in os.listdir(p_dst) if f.startswith("api")]
+            next_idx = len(existing_keys_in_repo) + 1
+            
+            local_keys = sorted([f for f in os.listdir(p_src) if f.startswith("api")])
+            for k_file in local_keys:
+                with open(os.path.join(p_src, k_file), "r") as f:
+                    k_content = f.read().strip()
+                
+                is_duplicate = False
+                for ex_k in existing_keys_in_repo:
+                    with open(os.path.join(p_dst, ex_k), "r") as f:
+                        if f.read().strip() == k_content:
+                            is_duplicate = True
+                            break
+                
+                if not is_duplicate:
+                    new_k_name = f"api_{next_idx}"
+                    with open(os.path.join(p_dst, new_k_name), "w") as f:
+                        f.write(k_content)
+                    next_idx += 1
 
-        # 4. 提交并推送
+        # 拷贝 MCP 配置
+        shutil.copy2(os.path.join(CONFIG_DIR, "mcp_config.json"), os.path.join(temp_dir, "mcp_config.json"))
+
+        # 3. 提交并推送
         os.chdir(temp_dir)
         subprocess.run(["git", "add", "."], env=env, check=True)
         
         status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, env=env)
         if not status.stdout.strip():
-            print("ℹ️ 配置已是最新，无需更新。")
+            print("ℹ️ 远程配置已是最新，无需叠加。")
             return
 
-        commit_msg = f"Update config from CLI"
+        commit_msg = f"Merge local config to repo"
         subprocess.run(["git", "commit", "-m", commit_msg], env=env, check=True)
         subprocess.run(["git", "push"], env=env, check=True)
         
-        print("✅ 配置已成功通过 SSH 上传到仓库！")
+        print("✅ 本地配置已成功叠加到远程仓库！")
 
     except Exception as e:
-        print(f"❌ 上传失败: 请检查您的 SSH 权限或仓库地址。错误: {e}")
+        print(f"❌ 上传失败: {e}")
     finally:
         os.chdir(BASE_DIR)
         if os.path.exists(temp_dir):
@@ -978,8 +1051,8 @@ AI CLI 是一个全能的命令行 AI 助手，支持工具调用、系统操作
   ai model            管理模型：切换当前模型、查看历史、或为当前目录创建 .ai-config.json
   ai switch           在已配置的供应商之间快速切换
   ai delete           删除不需要的供应商或特定的 API Key
-  ai download [url]   从 Git 仓库下载并覆盖所有配置 (用于多机同步)
-  ai update [url]     上传本地配置到 Git 仓库
+  ai download [url]   从 Git 仓库下载并合并配置 (用于多机同步，不覆盖现有 Key)
+  ai update [url]     将本地配置叠加上传到 Git 仓库
   ai status           查看当前生效的供应商、模型及工作区路径
   ai workspace [path] 设置 AI 的活动范围（影响文件系统工具的访问权限）
 
