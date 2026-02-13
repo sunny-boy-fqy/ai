@@ -2,7 +2,7 @@
 """
 AI CLI - 智能命令行助手
 """
-
+import readline
 import sys
 import asyncio
 import os

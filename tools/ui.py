@@ -128,6 +128,8 @@ class UI:
 
 {cls.BOLD}其他:{cls.END}
   ai version           显示版本
+  ai sync <URL>        从github仓库同步配置(git@github.com:...)
   ai update            更新程序
+  ai update <URL>      向github仓库更新配置(git@github.com:...)
   ai help              显示帮助
 """)
