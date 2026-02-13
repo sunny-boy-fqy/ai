@@ -21,7 +21,7 @@ import sys
 
 # 基础目录
 CONFIG_DIR = os.path.expanduser("~/.config/ai")
-USER_AI_DIR = os.path.expanduser("~/.ai")
+USER_AI_DIR = os.path.expanduser("~/ai")
 
 # 子目录
 VENV_DIR = os.path.join(CONFIG_DIR, "python_venv")
@@ -37,7 +37,9 @@ MCP_CONFIG_FILE = os.path.join(MCP_DIR, "mcp.config")
 PLUGIN_CACHE_FILE = os.path.join(CONFIG_DIR, "plugin_cache.json")
 
 # 版本
-VERSION = "v2.0"
+with open(os.path.join(USER_AI_DIR, "version.txt"), 'r', encoding='utf-8') as f:
+    VERSION = f.read()
+    print(VERSION)
 REPO_URL = "https://github.com/sunny-boy-fqy/ai.git"
 
 # 系统检测
