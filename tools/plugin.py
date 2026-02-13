@@ -3,8 +3,10 @@ AI CLI MCP插件管理
 """
 
 import os
+import sys
 import json
 import asyncio
+import subprocess
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from .constants import (
@@ -159,10 +161,12 @@ class PluginManager:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
             
+            # 隐藏 MCP server 的 stderr 输出
             params = StdioServerParameters(
                 command=cmd,
                 args=args,
-                env=os.environ.copy()
+                env=os.environ.copy(),
+                stderr=subprocess.DEVNULL  # 隐藏服务器输出
             )
             
             async with asyncio.timeout(15.0):
@@ -271,10 +275,12 @@ class MCPToolManager:
                 cmd = cmd.replace("npx", "npx.cmd")
             
             try:
+                # 隐藏 MCP server 的 stderr 输出
                 self.server_params[name] = StdioServerParameters(
                     command=cmd,
                     args=args,
-                    env=os.environ.copy()
+                    env=os.environ.copy(),
+                    stderr=subprocess.DEVNULL  # 隐藏服务器输出
                 )
             except:
                 pass

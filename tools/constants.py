@@ -95,6 +95,9 @@ DRIVER_MAP = {
     "dashscope": "dashscope"
 }
 
+# 驱动编号映射（用于交互式选择）
+LIBRARY_DRIVERS = {"1": "openai", "2": "zhipuai", "3": "groq", "4": "dashscope", "5": "anthropic"}
+
 # 能力关键词映射
 CAPABILITY_KEYWORDS = {
     "database": ["postgres", "mysql", "sqlite", "mongodb", "database", "sql", "query", "redis"],
