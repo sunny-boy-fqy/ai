@@ -39,7 +39,6 @@ PLUGIN_CACHE_FILE = os.path.join(CONFIG_DIR, "plugin_cache.json")
 # 版本
 with open(os.path.join(USER_AI_DIR, "version.txt"), 'r', encoding='utf-8') as f:
     VERSION = f.read()
-    print(VERSION)
 REPO_URL = "https://github.com/sunny-boy-fqy/ai.git"
 
 # 系统检测
@@ -114,11 +113,20 @@ CAPABILITY_KEYWORDS = {
     "data": ["csv", "excel", "json", "xml", "parse", "transform", "spreadsheet"],
     "image": ["image", "vision", "screenshot", "ocr", "visual", "picture"],
     "time": ["calendar", "time", "schedule", "date", "reminder", "clock"],
-    "command": ["shell", "terminal", "command", "exec", "run", "process"],
+    "command": ["shell", "terminal", "command", "exec", "run", "process","acg","bash","cmd"],
 }
 
 # 预定义的可用插件
 BUILTIN_PLUGINS = {
+    "mcp-shell-server":{
+        "name": "mcp-shell-server",
+        "npm_package": "@mkusaka/mcp-shell-server",
+        "description": "专为安全执行 shell 命令设计。",
+        "capabilities": ["command"],
+        "install_cmd": "npx",
+        "install_args": ["-y", "@mkusaka/mcp-shell-server"],
+        "verified": True,
+    },
     "puppeteer": {
         "name": "puppeteer",
         "npm_package": "@modelcontextprotocol/server-puppeteer",

@@ -57,14 +57,51 @@ class PluginManager:
         results = []
         query_lower = query.lower() if query else ""
         
+        # 构建能力类型到关键词的反向映射
+        # 例如: {"postgres": "database", "mysql": "database", ...}
+        keyword_to_capability = {}
+        for cap_type, keywords in CAPABILITY_KEYWORDS.items():
+            for keyword in keywords:
+                keyword_to_capability[keyword.lower()] = cap_type
+        
+        # 解析查询对应的能力类型
+        query_capabilities = set()
+        if query_lower:
+            # 检查查询本身是否是能力类型
+            if query_lower in CAPABILITY_KEYWORDS:
+                query_capabilities.add(query_lower)
+            # 检查查询是否匹配关键词
+            for keyword, cap_type in keyword_to_capability.items():
+                if query_lower in keyword:
+                    query_capabilities.add(cap_type)
+        
+        def matches_capabilities(caps: List[str]) -> bool:
+            """检查插件能力是否匹配查询"""
+            if not query_lower:
+                return True
+            caps_lower = [c.lower() for c in caps]
+            # 1. 匹配能力类型本身
+            for cap in caps_lower:
+                if query_lower in cap:
+                    return True
+            # 2. 通过关键词映射匹配
+            for cap in caps_lower:
+                if cap in query_capabilities:
+                    return True
+            # 3. 检查能力类型对应的关键词是否匹配查询
+            for cap in caps_lower:
+                if cap in CAPABILITY_KEYWORDS:
+                    for keyword in CAPABILITY_KEYWORDS[cap]:
+                        if query_lower in keyword.lower():
+                            return True
+            return False
+        
         # 搜索内置插件
         for name, data in BUILTIN_PLUGINS.items():
-            # 匹配名称、描述、能力
             caps = data.get("capabilities", [])
-            caps_str = " ".join(caps).lower()
             desc = data.get("description", "").lower()
             
-            if not query or query_lower in name.lower() or query_lower in desc or query_lower in caps_str:
+            if not query or query_lower in name.lower() or query_lower in desc or matches_capabilities(caps):
                 info = PluginInfo()
                 for k, v in data.items():
                     setattr(info, k, v)
@@ -77,10 +114,9 @@ class PluginManager:
                     cache = json.load(f)
                 for name, data in cache.get("plugins", {}).items():
                     caps = data.get("capabilities", [])
-                    caps_str = " ".join(caps).lower()
                     desc = data.get("description", "").lower()
                     
-                    if not query or query_lower in name.lower() or query_lower in desc or query_lower in caps_str:
+                    if not query or query_lower in name.lower() or query_lower in desc or matches_capabilities(caps):
                         info = PluginInfo()
                         info.name = name
                         info.description = data.get("description", "")
