@@ -93,6 +93,11 @@ class UI:
 {cls.BOLD}用法:{cls.END}
   ai <命令> [参数]
 
+{cls.BOLD}Leader-Worker 模式:{cls.END}
+  ai init              初始化当前目录(.ai文件夹)
+  ai init --auto       使用全局配置自动初始化
+  ai work              进入Leader-Worker工作模式
+
 {cls.BOLD}对话:{cls.END}
   ai ask <问题>        即时问答
   ai chat              进入对话模式

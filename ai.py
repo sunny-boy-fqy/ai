@@ -19,6 +19,10 @@ from tools.chat import ChatEngine
 from tools.set_workspace import WorkspaceManager
 from tools.ui import UI
 
+# 导入 Leader-Worker 模块
+from tools.core.init import AIInitializer
+from tools.core.leader_worker import LeaderAI, run_leader_worker_session
+
 
 def handle_history(args):
     """处理历史命令"""
@@ -98,6 +102,65 @@ def handle_workspace(args):
     WorkspaceManager.handle_command(args)
 
 
+def handle_init(args):
+    """处理初始化命令"""
+    # 获取当前目录
+    current_dir = os.getcwd()
+    
+    initializer = AIInitializer(current_dir)
+    
+    if initializer.is_initialized():
+        UI.warn(f"当前目录已初始化: {initializer.ai_dir}")
+        if UI.confirm("是否重新初始化？"):
+            import shutil
+            shutil.rmtree(initializer.ai_dir)
+        else:
+            initializer.show_status()
+            return
+    
+    # 检查参数
+    auto_mode = "--auto" in args or "-a" in args
+    
+    if auto_mode:
+        # 自动模式：使用全局配置
+        success = initializer.auto_initialize()
+    else:
+        # 交互模式：让用户选择
+        success = initializer.initialize()
+    
+    if success:
+        print()
+        UI.success("初始化完成！现在可以使用 'ai work' 进入工作模式")
+
+
+async def handle_work(args):
+    """处理 work 命令 - 启动 Leader-Worker 会话"""
+    # 获取当前目录
+    current_dir = os.getcwd()
+    
+    initializer = AIInitializer(current_dir)
+    
+    # 检查是否已初始化
+    if not initializer.is_initialized():
+        UI.info("当前目录未初始化，正在自动初始化...")
+        
+        # 自动初始化
+        if not initializer.auto_initialize():
+            UI.error("初始化失败，请手动运行 'ai init'")
+            return
+    
+    # 启动 Leader-Worker 会话
+    ai_dir = initializer.ai_dir
+    
+    leader = LeaderAI(ai_dir)
+    
+    if not leader.is_ready():
+        UI.error("Leader AI 配置不完整，请运行 'ai init' 重新配置")
+        return
+    
+    await run_leader_worker_session(ai_dir)
+
+
 def check_workspace() -> bool:
     """检查工作区配置，未配置时提示用户配置"""
     return WorkspaceManager.check_and_prompt()
@@ -157,6 +220,14 @@ def main():
     elif cmd == "workspace":
         handle_workspace(args[1:])
 
+    # 初始化命令
+    elif cmd == "init":
+        handle_init(args[1:])
+
+    # Leader-Worker 工作命令
+    elif cmd == "work":
+        asyncio.run(handle_work(args[1:]))
+
     # 插件命令
     elif cmd == "search":
         if len(args) < 2:
@@ -189,7 +260,14 @@ def main():
 
     # 状态命令
     elif cmd == "status":
-        ProviderManager.show_status()
+        # 检查是否在已初始化的目录
+        current_dir = os.getcwd()
+        initializer = AIInitializer(current_dir)
+        
+        if initializer.is_initialized():
+            initializer.show_status()
+        else:
+            ProviderManager.show_status()
 
     elif cmd == "version":
         UpdateManager.show_version()
