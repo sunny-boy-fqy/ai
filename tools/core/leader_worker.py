@@ -1,5 +1,5 @@
 """
-AI CLI Leader-Worker 核心
+AI CLI Leader-Worker 核心（已修复 MCP 工具调用）
 实现 Leader AI 和 Worker AI 的协作机制
 """
 
@@ -21,17 +21,6 @@ class ModelInterface:
     """模型接口 - 用于调用大模型"""
     
     def __init__(self, config: Dict):
-        """
-        初始化模型接口
-        
-        Args:
-            config: 模型配置 {
-                "provider": str,
-                "model": str,
-                "api_key": str,
-                "base_url": str
-            }
-        """
         self.config = config
         self.client = None
         self._init_client()
@@ -56,18 +45,7 @@ class ModelInterface:
         tools: List[Dict] = None,
         stream: bool = False
     ) -> Tuple[str, List[Dict]]:
-        """
-        调用模型
-        
-        Args:
-            prompt: 用户提示
-            system_prompt: 系统提示
-            tools: 工具定义
-            stream: 是否流式输出
-            
-        Returns:
-            (响应文本, 工具调用列表)
-        """
+        """调用模型"""
         if not self.client:
             return "客户端未初始化", []
         
@@ -81,7 +59,6 @@ class ModelInterface:
                 "model": self.config.get("model"),
                 "messages": messages,
             }
-            
             if tools:
                 kwargs["tools"] = tools
             
@@ -107,19 +84,10 @@ class ModelInterface:
             return f"调用失败: {e}", []
     
     def _clean_model_output(self, content: str) -> str:
-        """
-        清理模型输出，移除异常的 token 标记
-        
-        Args:
-            content: 原始输出
-            
-        Returns:
-            清理后的输出
-        """
+        """清理模型输出"""
         if not content:
             return content
         
-        # 移除常见的异常 token 标记
         patterns = [
             r'<\|tool_calls_section_begin\|>',
             r'<\|tool_calls_section_end\|>',
@@ -128,38 +96,23 @@ class ModelInterface:
             r'<\|tool_call_argument_begin\|>',
             r'<\|tool_call_argument_end\|>',
             r'<\|tool_call_argument\|>',
-            r'<\|.*?\|>',  # 其他类似的标记
+            r'<\|.*?\|>',
         ]
         
         cleaned = content
         for pattern in patterns:
             cleaned = re.sub(pattern, '', cleaned)
         
-        # 移除 "functions.xxx:n" 这样的残留片段
         cleaned = re.sub(r'functions\.\w+:\d+\s*', '', cleaned)
-        
-        # 移除孤立的 JSON 对象片段（通常是工具调用参数残留）
-        # 匹配模式：{"xxx": "yyy", ...} 格式的单行 JSON
         cleaned = re.sub(r'\{\s*"[^"]+"\s*:\s*"[^"]*"[^}]*\}\s*', '', cleaned)
-        
-        # 移除多余空白
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         
         return cleaned
     
     def _parse_tool_calls_from_text(self, content: str) -> List[Dict]:
-        """
-        从文本中解析工具调用（当模型不返回结构化工具调用时）
-        
-        Args:
-            content: 模型输出文本
-            
-        Returns:
-            工具调用列表
-        """
+        """从文本中解析工具调用"""
         tool_calls = []
         
-        # 尝试从文本中提取 JSON 工具调用
         # 模式1: functions.name:args
         pattern1 = r'functions\.([\w_]+):(\d+)\s*\n?\s*(\{.*?\})'
         matches1 = re.findall(pattern1, content, re.DOTALL)
@@ -179,7 +132,7 @@ class ModelInterface:
             except json.JSONDecodeError:
                 continue
         
-        # 模式2: JSON 代码块中的工具调用
+        # 模式2: JSON 代码块
         pattern2 = r'```json\s*(.*?)\s*```'
         matches2 = re.findall(pattern2, content, re.DOTALL)
         
@@ -207,9 +160,7 @@ class ModelInterface:
         tools: List[Dict] = None,
         stream: bool = True
     ) -> Tuple[str, List[Dict]]:
-        """
-        异步调用模型（支持流式输出）
-        """
+        """异步调用模型"""
         if not self.client:
             return "客户端未初始化", []
         
@@ -224,7 +175,6 @@ class ModelInterface:
                 "messages": messages,
                 "stream": stream
             }
-            
             if tools:
                 kwargs["tools"] = tools
             
@@ -242,7 +192,6 @@ class ModelInterface:
                     
                     if delta.content:
                         raw_content = delta.content
-                        # 清理异常 token 标记后再输出
                         clean_content = self._clean_model_output(raw_content)
                         if clean_content:
                             print(clean_content, end="", flush=True)
@@ -264,12 +213,10 @@ class ModelInterface:
                             if tc.function.arguments:
                                 target["function"]["arguments"] += tc.function.arguments
                 
-                print()  # 换行
+                print()
                 
-                # 清理输出内容
                 full_content = self._clean_model_output(full_content)
                 
-                # 如果没有结构化的工具调用，尝试从文本中解析
                 if not tool_calls and tools:
                     tool_calls = self._parse_tool_calls_from_text(full_content)
                 
@@ -290,9 +237,99 @@ class ModelInterface:
                             }
                         })
                 
-                # 如果没有结构化的工具调用，尝试从文本中解析
                 if not tool_calls and tools:
                     tool_calls = self._parse_tool_calls_from_text(content)
+                
+                return content, tool_calls
+                
+        except Exception as e:
+            return f"调用失败: {e}", []
+    
+    async def call_with_messages(
+        self,
+        messages: List[Dict],
+        tools: List[Dict] = None,
+        stream: bool = True
+    ) -> Tuple[str, List[Dict]]:
+        """
+        使用完整消息历史调用模型（用于工具调用循环）
+        
+        Args:
+            messages: 完整的消息历史
+            tools: 工具定义
+            stream: 是否流式输出
+            
+        Returns:
+            (响应文本, 工具调用列表)
+        """
+        if not self.client:
+            return "客户端未初始化", []
+        
+        try:
+            kwargs = {
+                "model": self.config.get("model"),
+                "messages": messages,
+                "stream": stream
+            }
+            if tools:
+                kwargs["tools"] = tools
+            
+            response = self.client.chat.completions.create(**kwargs)
+            
+            if stream:
+                full_content = ""
+                tool_calls = []
+                
+                for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    
+                    delta = chunk.choices[0].delta
+                    
+                    if delta.content:
+                        raw_content = delta.content
+                        clean_content = self._clean_model_output(raw_content)
+                        if clean_content:
+                            print(clean_content, end="", flush=True)
+                        full_content += raw_content
+                    
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            while len(tool_calls) <= tc.index:
+                                tool_calls.append({
+                                    "id": f"tc_{tc.index}",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""}
+                                })
+                            target = tool_calls[tc.index]
+                            if tc.id:
+                                target["id"] = tc.id
+                            if tc.function.name:
+                                target["function"]["name"] += tc.function.name
+                            if tc.function.arguments:
+                                target["function"]["arguments"] += tc.function.arguments
+                
+                if full_content:
+                    print()
+                
+                full_content = self._clean_model_output(full_content)
+                
+                return full_content, tool_calls
+            else:
+                content = response.choices[0].message.content or ""
+                content = self._clean_model_output(content)
+                tool_calls = []
+                
+                if response.choices[0].message.tool_calls:
+                    for tc in response.choices[0].message.tool_calls:
+                        tool_calls.append({
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        })
                 
                 return content, tool_calls
                 
@@ -301,22 +338,9 @@ class ModelInterface:
 
 
 class LeaderAI:
-    """
-    Leader AI
-    - 接收用户指令
-    - 规划和拆分任务
-    - 分配任务给 Worker
-    - 监控进度
-    - 与用户交互
-    """
+    """Leader AI - 任务规划和协调"""
     
     def __init__(self, ai_dir: str):
-        """
-        初始化 Leader AI
-        
-        Args:
-            ai_dir: .ai 目录路径
-        """
         self.ai_dir = ai_dir
         self.root_dir = os.path.dirname(ai_dir)
         
@@ -330,7 +354,7 @@ class LeaderAI:
         self.task_manager = TaskManager(ai_dir)
         self.mcp_manager = MCPToolManager()
         
-        # 读取 README 指南
+        # 读取指南
         self.leader_guide = self._load_guide("README_for_leader.md")
         self.worker_guide = self._load_guide("README_for_worker.md")
     
@@ -348,7 +372,6 @@ class LeaderAI:
     
     def _load_guide(self, filename: str) -> str:
         """加载指南文档"""
-        # 先从模板目录读取
         template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", filename)
         if os.path.exists(template_path):
             try:
@@ -387,12 +410,10 @@ class LeaderAI:
         print("    - clear: 清空已完成的任务")
         print()
         
-        # 创建输入处理器
         input_handler = InputHandler("", allow_multiline=True)
         
         while True:
             try:
-                # 使用多行输入
                 print(f"{UI.CYAN}Leader>{UI.END} ", end="", flush=True)
                 user_input = input_handler.get_input()
                 
@@ -418,12 +439,13 @@ class LeaderAI:
                 break
     
     async def process_user_input(self, user_input: str):
-        """
-        处理用户输入
+        """处理用户输入"""
+        # 获取 MCP 工具定义
+        tools = await self.mcp_manager.get_tools()
         
-        Args:
-            user_input: 用户输入
-        """
+        # 添加进化工具
+        tools.extend(self._get_evolution_tools())
+        
         # 构建系统提示
         system_prompt = f"""你是 Leader AI，负责任务规划和协调。
 
@@ -440,55 +462,165 @@ class LeaderAI:
 
 当前任务状态:
 {json.dumps(self.task_manager.get_statistics(), ensure_ascii=False, indent=2)}
+
+你可以使用 MCP 工具来执行文件操作等任务。
 """
         
         # 调用模型
         print(f"\n{UI.BLUE}[Leader]{UI.END} ", end="", flush=True)
-        response, tool_calls = await self.model.call_async(user_input, system_prompt)
+        response, tool_calls = await self.model.call_async(user_input, system_prompt, tools)
         
-        # 更新任务状态
+        # 处理工具调用循环
+        if tool_calls:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ]
+            await self._handle_tool_calls_loop(tool_calls, messages, tools)
+        
+        # 显示任务状态
         self.task_manager.show_progress()
     
-    async def plan_tasks(self, user_request: str) -> bool:
+    async def _handle_tool_calls_loop(self, tool_calls: List[Dict], messages: List[Dict], tools: List[Dict]):
         """
-        规划任务
+        处理工具调用循环
         
         Args:
-            user_request: 用户需求描述
-            
-        Returns:
-            是否成功
+            tool_calls: 工具调用列表
+            messages: 消息历史
+            tools: 工具定义
         """
+        max_iterations = 20
+        iteration = 0
+        
+        while tool_calls and iteration < max_iterations:
+            iteration += 1
+            
+            # 添加助手响应
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls
+            })
+            
+            # 处理所有工具调用
+            for tc in tool_calls:
+                name = tc["function"]["name"]
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except:
+                    args = {}
+                
+                UI.info(f"调用: {name}")
+                
+                # MCP 工具
+                if "__" in name:
+                    result = await self.mcp_manager.call(name, args)
+                # 进化工具
+                elif name == "search_plugin":
+                    results = PluginManager.search(args.get("query", ""))
+                    result = self._format_search_results(results)
+                elif name == "install_plugin":
+                    success = await PluginManager.install(args.get("name", ""))
+                    if success:
+                        await self.mcp_manager.initialize()
+                        tools = await self.mcp_manager.get_tools()
+                        tools.extend(self._get_evolution_tools())
+                    result = "安装成功" if success else "安装失败"
+                elif name == "analyze_gap":
+                    result = "分析完成"
+                else:
+                    result = f"未知工具: {name}"
+                
+                # 添加工具结果
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "name": name,
+                    "content": result
+                })
+            
+            # 继续对话
+            print(f"{UI.CYAN}[继续]{UI.END} ", end="", flush=True)
+            response, tool_calls = await self.model.call_with_messages(messages, tools, stream=True)
+            
+            if response:
+                messages.append({"role": "assistant", "content": response})
+    
+    def _get_evolution_tools(self) -> List[Dict]:
+        """获取进化工具定义"""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_plugin",
+                    "description": "搜索MCP插件",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "搜索关键词"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "install_plugin",
+                    "description": "安装MCP插件",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "插件名称"}
+                        },
+                        "required": ["name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "analyze_gap",
+                    "description": "分析能力差距",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task": {"type": "string", "description": "任务描述"}
+                        }
+                    }
+                }
+            }
+        ]
+    
+    def _format_search_results(self, results: list) -> str:
+        """格式化搜索结果"""
+        if not results:
+            return "未找到匹配插件"
+        
+        lines = ["找到以下插件：\n"]
+        for p in results[:10]:
+            lines.append(f"- {p.name}: {p.description}")
+            if hasattr(p, 'required_env') and p.required_env:
+                lines.append(f"  需要环境变量: {', '.join(p.required_env)}")
+        
+        return "\n".join(lines)
+    
+    async def plan_tasks(self, user_request: str) -> bool:
+        """规划任务"""
         if not self.model:
             UI.error("模型未初始化")
             return False
         
         UI.info("正在分析需求并规划任务...")
         
-        # 构建规划提示
         system_prompt = f"""你是任务规划专家。
 
 {self.leader_guide}
 
-请根据用户需求，创建详细的任务列表。每个任务应该是：
-- 单一职责
-- 可执行
-- 有明确的完成标准
-
-返回 JSON 格式的任务列表，包含以下字段：
-- title: 任务标题
-- description: 详细描述
-- type: 任务类型 (code|doc|config|test|review|refactor|fix)
-- priority: 优先级 (1-5, 1最高)
-- dependencies: 依赖的任务ID列表
-- files_to_modify: 需要修改的文件列表
-- acceptance_criteria: 验收标准
+请根据用户需求，创建详细的任务列表。
 """
         
         response, _ = self.model.call(user_request, system_prompt)
-        
-        # 解析响应，创建任务
-        # TODO: 更智能的解析
         tasks = self._parse_tasks_from_response(response)
         
         for task_data in tasks:
@@ -501,14 +633,9 @@ class LeaderAI:
     
     def _parse_tasks_from_response(self, response: str) -> List[Dict]:
         """从模型响应中解析任务"""
-        # 尝试提取 JSON
         tasks = []
         
         try:
-            # 尝试找到 JSON 块
-            import re
-            
-            # 查找 ```json ... ``` 块
             json_blocks = re.findall(r'```json\s*(.*?)\s*```', response, re.DOTALL)
             
             for block in json_blocks:
@@ -521,7 +648,6 @@ class LeaderAI:
                 except:
                     continue
             
-            # 如果没找到 JSON 块，尝试直接解析
             if not tasks:
                 data = json.loads(response)
                 if isinstance(data, list):
@@ -530,7 +656,6 @@ class LeaderAI:
                     tasks = data["tasks"]
                     
         except json.JSONDecodeError:
-            # 如果解析失败，创建一个简单任务
             tasks = [{
                 "title": "执行用户需求",
                 "description": response,
@@ -542,22 +667,12 @@ class LeaderAI:
         return tasks
     
     async def assign_task_to_worker(self, task: Dict) -> Tuple[bool, str]:
-        """
-        分配任务给 Worker
-        
-        Args:
-            task: 任务字典
-            
-        Returns:
-            (是否成功, 结果/错误信息)
-        """
+        """分配任务给 Worker"""
         if not self.worker_model:
             return False, "Worker 模型未配置"
         
-        # 标记任务为进行中
         self.task_manager.set_task_status(task["id"], "in_progress")
         
-        # 创建 Worker 实例
         worker = WorkerAI(
             ai_dir=self.ai_dir,
             task=task,
@@ -566,10 +681,8 @@ class LeaderAI:
             leader=self
         )
         
-        # 执行任务
         success, result = await worker.execute()
         
-        # 更新任务状态
         if success:
             self.task_manager.set_task_status(task["id"], "completed", result=result)
         else:
@@ -578,40 +691,16 @@ class LeaderAI:
         return success, result
     
     def request_user_help(self, message: str) -> str:
-        """
-        向用户请求帮助
-        
-        Args:
-            message: 请求消息
-            
-        Returns:
-            用户响应
-        """
+        """向用户请求帮助"""
         UI.section("需要您的帮助")
         print(f"\n  {message}\n")
         
         response = UI.input("请提供指导或帮助")
         return response
-    
-    def update_progress_display(self):
-        """更新进度显示"""
-        # 清屏并显示进度
-        if sys.platform != "win32":
-            os.system('clear')
-        else:
-            os.system('cls')
-        
-        self.task_manager.show_progress()
 
 
 class WorkerAI:
-    """
-    Worker AI
-    - 执行具体任务
-    - 自动使用 MCP 插件
-    - 不与用户交互
-    - 出错时与 Leader 沟通
-    """
+    """Worker AI - 任务执行"""
     
     def __init__(
         self,
@@ -621,27 +710,13 @@ class WorkerAI:
         mcp_manager: MCPToolManager,
         leader: LeaderAI
     ):
-        """
-        初始化 Worker AI
-        
-        Args:
-            ai_dir: .ai 目录
-            task: 要执行的任务
-            model_interface: 模型接口
-            mcp_manager: MCP 工具管理器
-            leader: Leader AI 引用（用于报告错误）
-        """
         self.ai_dir = ai_dir
         self.root_dir = os.path.dirname(ai_dir)
         self.task = task
         self.model = model_interface
         self.mcp_manager = mcp_manager
         self.leader = leader
-        
-        # 加载指南
         self.worker_guide = self._load_guide()
-        
-        # 工具定义
         self.tools = None
     
     def _load_guide(self) -> str:
@@ -660,15 +735,20 @@ class WorkerAI:
         return ""
     
     async def execute(self) -> Tuple[bool, str]:
-        """
-        执行任务
-        
-        Returns:
-            (是否成功, 结果摘要/错误信息)
-        """
+        """执行任务"""
         try:
+            # 确保 MCP 管理器已初始化
+            if not self.mcp_manager:
+                return False, "MCP 管理器未初始化"
+            
+            # 重新初始化以确保工具可用
+            await self.mcp_manager.initialize()
+            
             # 获取 MCP 工具
             self.tools = await self.mcp_manager.get_tools()
+            
+            if not self.tools:
+                UI.warn("未找到可用的 MCP 工具，请先安装插件: ai install <plugin-name>")
             
             # 构建任务提示
             system_prompt = f"""你是 Worker AI，负责执行具体任务。
@@ -690,11 +770,13 @@ class WorkerAI:
 2. 使用可用的 MCP 工具完成任务
 3. 如果遇到无法解决的问题，说明具体错误
 4. 完成后提供简要结果摘要
+
+可用工具数量: {len(self.tools)}
 """
             
             user_prompt = f"请执行任务: {self.task.get('title')}\n\n{self.task.get('description')}"
             
-            # 执行任务循环
+            # 初始化消息
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -703,47 +785,33 @@ class WorkerAI:
             return await self._execution_loop(messages)
             
         except Exception as e:
-            return False, f"执行异常: {e}"
+            import traceback
+            return False, f"执行异常: {e}\n{traceback.format_exc()}"
     
     async def _execution_loop(self, messages: List[Dict]) -> Tuple[bool, str]:
-        """
-        执行循环（处理工具调用）
-        
-        Args:
-            messages: 消息历史
-            
-        Returns:
-            (是否成功, 结果)
-        """
+        """执行循环"""
         max_iterations = 20
         iteration = 0
         
         while iteration < max_iterations:
             iteration += 1
             
-            # 调用模型
-            response, tool_calls = await self.model.call_async(
-                messages[-1]["content"],
-                messages[0]["content"],
-                self.tools,
-                stream=True
-            )
+            # 使用完整的消息历史调用模型
+            response, tool_calls = await self.model.call_with_messages(messages, self.tools, stream=True)
             
-            # 添加响应到消息历史
-            messages.append({
-                "role": "assistant",
-                "content": response,
-                "tool_calls": tool_calls if tool_calls else None
-            })
+            # 添加助手响应
+            if response or tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": response if response else None,
+                    "tool_calls": tool_calls if tool_calls else None
+                })
             
             # 如果没有工具调用，任务完成
             if not tool_calls:
-                return True, response
+                return True, response or "任务完成"
             
             # 处理工具调用
-            all_success = True
-            error_messages = []
-            
             for tc in tool_calls:
                 result = await self._handle_tool_call(tc)
                 
@@ -753,28 +821,11 @@ class WorkerAI:
                     "name": tc["function"]["name"],
                     "content": result
                 })
-                
-                # 检查是否出错
-                if "ERROR" in result or "失败" in result:
-                    all_success = False
-                    error_messages.append(result)
-            
-            # 如果多次失败，报告给 Leader
-            if not all_success and len(error_messages) > 3:
-                return False, "\n".join(error_messages)
         
         return False, "超过最大迭代次数"
     
     async def _handle_tool_call(self, tc: Dict) -> str:
-        """
-        处理工具调用
-        
-        Args:
-            tc: 工具调用字典
-            
-        Returns:
-            工具执行结果
-        """
+        """处理工具调用"""
         name = tc["function"]["name"]
         
         try:
@@ -782,11 +833,12 @@ class WorkerAI:
         except:
             args = {}
         
-        UI.info(f"Worker 执行: {name}")
+        UI.info(f"执行: {name}")
         
         # MCP 工具调用
         if "__" in name:
-            return await self.mcp_manager.call(name, args)
+            result = await self.mcp_manager.call(name, args)
+            return result
         
         # 内置工具
         if name == "report_error_to_leader":
@@ -795,32 +847,16 @@ class WorkerAI:
         return f"未知工具: {name}"
     
     def _report_to_leader(self, error: str) -> str:
-        """
-        向 Leader 报告错误
-        
-        Args:
-            error: 错误信息
-            
-        Returns:
-            Leader 的响应
-        """
-        # 记录错误到任务
+        """向 Leader 报告错误"""
         self.leader.task_manager.add_note(
             self.task["id"],
             f"Worker 报告错误: {error}",
             "worker"
         )
-        
-        # Leader 会决定如何处理
         return f"已将错误报告给 Leader: {error}"
 
 
 async def run_leader_worker_session(ai_dir: str):
-    """
-    启动 Leader-Worker 会话
-    
-    Args:
-        ai_dir: .ai 目录路径
-    """
+    """启动 Leader-Worker 会话"""
     leader = LeaderAI(ai_dir)
     await leader.start_session()

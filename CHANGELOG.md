@@ -5,6 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 并且本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.2] - 2025-02-14
+
+### 修复
+- BUG 修复 Leader AI 无法调用 MCP 插件的问题
+  - 添加 `ModelInterface.call_with_messages()` 方法支持完整消息历史
+  - `process_user_input()` 现在正确获取并传递 MCP 工具定义
+  - 实现 `_handle_tool_calls_loop()` 处理工具调用循环
+  - 添加进化工具（search_plugin, install_plugin, analyze_gap）
+- BUG 修复 Worker AI 无法调用 MCP 插件的问题
+  - Worker 执行前重新初始化 MCP 管理器
+  - 使用 `call_with_messages()` 保持消息历史
+  - 正确处理工具调用结果并继续对话
+
 ## [0.1.1] - 2025-02-14
 
 ### 新增
