@@ -5,6 +5,7 @@ AI CLI 对话功能
 import os
 import sys
 import json
+import re
 import readline
 import asyncio
 from datetime import datetime
@@ -13,10 +14,14 @@ from .constants import HISTORY_DIR, ensure_dirs
 from .config_mgr import ConfigManager
 from .plugin import PluginManager, MCPToolManager
 from .ui import UI
+from .core.input_handler import InputHandler
 
 
 class ChatEngine:
     """对话引擎"""
+    
+    def __init__(self):
+        self.input_handler = InputHandler("", allow_multiline=True)
     
     @classmethod
     async def ask(cls, question: str, stream: bool = True) -> str:
@@ -66,11 +71,20 @@ class ChatEngine:
             msg_list = [{"role": "system", "content": cls._get_system_prompt()}]
         
         UI.section("对话模式")
+        print("多行输入支持:")
+        print("  - 以 \\ 结尾继续输入下一行")
+        print("  - 输入 ``` 开始多行块，再输入 ``` 结束")
+        print()
         print("输入 'exit' 退出, 'clear' 清空上下文\n")
+        
+        # 创建输入处理器
+        input_handler = InputHandler("", allow_multiline=True)
         
         while True:
             try:
-                user_input = input("You > ").strip()
+                print("You > ", end="", flush=True)
+                user_input = input_handler.get_input()
+                
                 if not user_input:
                     continue
                 if user_input.lower() in ["exit", "quit"]:
@@ -138,6 +152,39 @@ class ChatEngine:
                 return full_response
     
     @classmethod
+    def _clean_stream_output(cls, content: str) -> str:
+        """清理流式输出中的异常 token"""
+        if not content:
+            return content
+        
+        # 移除常见的异常 token 标记
+        patterns = [
+            r'<\|tool_calls_section_begin\|>',
+            r'<\|tool_calls_section_end\|>',
+            r'<\|tool_call_begin\|>',
+            r'<\|tool_call_end\|>',
+            r'<\|tool_call_argument_begin\|>',
+            r'<\|tool_call_argument_end\|>',
+            r'<\|tool_call_argument\|>',
+            r'<\|.*?\|>',  # 其他类似的标记
+        ]
+        
+        cleaned = content
+        for pattern in patterns:
+            cleaned = re.sub(pattern, '', cleaned)
+        
+        # 移除 "functions.xxx:n" 这样的残留片段
+        cleaned = re.sub(r'functions\.\w+:\d+\s*', '', cleaned)
+        
+        # 移除孤立的 JSON 对象片段
+        cleaned = re.sub(r'\{\s*"[^"]+"\s*:\s*"[^"]*"[^}]*\}\s*', '', cleaned)
+        
+        # 移除多余的空白
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        return cleaned
+    
+    @classmethod
     async def _handle_stream(cls, response) -> tuple:
         """处理流式响应"""
         full = ""
@@ -150,8 +197,12 @@ class ChatEngine:
             delta = chunk.choices[0].delta
             
             if delta.content:
-                print(delta.content, end="", flush=True)
-                full += delta.content
+                raw_content = delta.content
+                # 清理异常标记后再输出
+                clean_content = cls._clean_stream_output(raw_content)
+                if clean_content:
+                    print(clean_content, end="", flush=True)
+                full += raw_content
             
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -168,6 +219,9 @@ class ChatEngine:
                         target["function"]["name"] += tc.function.name
                     if tc.function.arguments:
                         target["function"]["arguments"] += tc.function.arguments
+        
+        # 清理完整输出
+        full = cls._clean_stream_output(full)
         
         return full, tool_calls
     

@@ -6,6 +6,7 @@ AI CLI Leader-Worker 核心
 import os
 import sys
 import json
+import re
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -13,6 +14,7 @@ from ..config_mgr import ConfigManager
 from ..plugin import PluginManager, MCPToolManager
 from ..ui import UI
 from .task_manager import TaskManager
+from .input_handler import InputHandler
 
 
 class ModelInterface:
@@ -104,6 +106,100 @@ class ModelInterface:
         except Exception as e:
             return f"调用失败: {e}", []
     
+    def _clean_model_output(self, content: str) -> str:
+        """
+        清理模型输出，移除异常的 token 标记
+        
+        Args:
+            content: 原始输出
+            
+        Returns:
+            清理后的输出
+        """
+        if not content:
+            return content
+        
+        # 移除常见的异常 token 标记
+        patterns = [
+            r'<\|tool_calls_section_begin\|>',
+            r'<\|tool_calls_section_end\|>',
+            r'<\|tool_call_begin\|>',
+            r'<\|tool_call_end\|>',
+            r'<\|tool_call_argument_begin\|>',
+            r'<\|tool_call_argument_end\|>',
+            r'<\|tool_call_argument\|>',
+            r'<\|.*?\|>',  # 其他类似的标记
+        ]
+        
+        cleaned = content
+        for pattern in patterns:
+            cleaned = re.sub(pattern, '', cleaned)
+        
+        # 移除 "functions.xxx:n" 这样的残留片段
+        cleaned = re.sub(r'functions\.\w+:\d+\s*', '', cleaned)
+        
+        # 移除孤立的 JSON 对象片段（通常是工具调用参数残留）
+        # 匹配模式：{"xxx": "yyy", ...} 格式的单行 JSON
+        cleaned = re.sub(r'\{\s*"[^"]+"\s*:\s*"[^"]*"[^}]*\}\s*', '', cleaned)
+        
+        # 移除多余空白
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        return cleaned
+    
+    def _parse_tool_calls_from_text(self, content: str) -> List[Dict]:
+        """
+        从文本中解析工具调用（当模型不返回结构化工具调用时）
+        
+        Args:
+            content: 模型输出文本
+            
+        Returns:
+            工具调用列表
+        """
+        tool_calls = []
+        
+        # 尝试从文本中提取 JSON 工具调用
+        # 模式1: functions.name:args
+        pattern1 = r'functions\.([\w_]+):(\d+)\s*\n?\s*(\{.*?\})'
+        matches1 = re.findall(pattern1, content, re.DOTALL)
+        
+        for match in matches1:
+            func_name, idx, args_str = match
+            try:
+                args = json.loads(args_str)
+                tool_calls.append({
+                    "id": f"tc_{idx}",
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "arguments": json.dumps(args)
+                    }
+                })
+            except json.JSONDecodeError:
+                continue
+        
+        # 模式2: JSON 代码块中的工具调用
+        pattern2 = r'```json\s*(.*?)\s*```'
+        matches2 = re.findall(pattern2, content, re.DOTALL)
+        
+        for match in matches2:
+            try:
+                data = json.loads(match)
+                if isinstance(data, dict) and "name" in data and "arguments" in data:
+                    tool_calls.append({
+                        "id": f"tc_{len(tool_calls)}",
+                        "type": "function",
+                        "function": {
+                            "name": data["name"],
+                            "arguments": json.dumps(data["arguments"])
+                        }
+                    })
+            except json.JSONDecodeError:
+                continue
+        
+        return tool_calls
+    
     async def call_async(
         self,
         prompt: str,
@@ -145,8 +241,12 @@ class ModelInterface:
                     delta = chunk.choices[0].delta
                     
                     if delta.content:
-                        print(delta.content, end="", flush=True)
-                        full_content += delta.content
+                        raw_content = delta.content
+                        # 清理异常 token 标记后再输出
+                        clean_content = self._clean_model_output(raw_content)
+                        if clean_content:
+                            print(clean_content, end="", flush=True)
+                        full_content += raw_content
                     
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
@@ -165,9 +265,18 @@ class ModelInterface:
                                 target["function"]["arguments"] += tc.function.arguments
                 
                 print()  # 换行
+                
+                # 清理输出内容
+                full_content = self._clean_model_output(full_content)
+                
+                # 如果没有结构化的工具调用，尝试从文本中解析
+                if not tool_calls and tools:
+                    tool_calls = self._parse_tool_calls_from_text(full_content)
+                
                 return full_content, tool_calls
             else:
                 content = response.choices[0].message.content or ""
+                content = self._clean_model_output(content)
                 tool_calls = []
                 
                 if response.choices[0].message.tool_calls:
@@ -180,6 +289,10 @@ class ModelInterface:
                                 "arguments": tc.function.arguments
                             }
                         })
+                
+                # 如果没有结构化的工具调用，尝试从文本中解析
+                if not tool_calls and tools:
+                    tool_calls = self._parse_tool_calls_from_text(content)
                 
                 return content, tool_calls
                 
@@ -263,12 +376,25 @@ class LeaderAI:
         print(f"  Leader 模型: {self.config.get('model')}")
         print(f"  Worker 模型: {self.worker_config.get('model')}")
         print()
-        print("  输入 'exit' 退出, 'status' 查看进度, 'clear' 清空任务")
+        print("  多行输入支持:")
+        print("    - 以 \\ 结尾继续输入下一行")
+        print("    - 输入 ``` 开始多行块，再输入 ``` 结束")
+        print("    - 或输入 \"\"\" 开始多行块，再输入 \"\"\" 结束")
         print()
+        print("  命令:")
+        print("    - exit: 退出")
+        print("    - status: 查看进度")
+        print("    - clear: 清空已完成的任务")
+        print()
+        
+        # 创建输入处理器
+        input_handler = InputHandler("", allow_multiline=True)
         
         while True:
             try:
-                user_input = input(f"{UI.CYAN}Leader>{UI.END} ").strip()
+                # 使用多行输入
+                print(f"{UI.CYAN}Leader>{UI.END} ", end="", flush=True)
+                user_input = input_handler.get_input()
                 
                 if not user_input:
                     continue
@@ -288,7 +414,7 @@ class LeaderAI:
                 await self.process_user_input(user_input)
                 
             except KeyboardInterrupt:
-                print()
+                print("\n")
                 break
     
     async def process_user_input(self, user_input: str):
