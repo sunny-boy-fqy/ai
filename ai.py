@@ -158,7 +158,79 @@ async def handle_work(args):
         UI.error("Leader AI 配置不完整，请运行 'ai init' 重新配置")
         return
     
+    # 检查是否有任务文件参数
+    if args and args[0] == "--file":
+        if len(args) < 2:
+            UI.error("请指定任务文件路径")
+            return
+        
+        # 从文件读取任务
+        task_file = args[1]
+        if not os.path.exists(task_file):
+            UI.error(f"任务文件不存在: {task_file}")
+            return
+        
+        try:
+            with open(task_file, 'r', encoding='utf-8') as f:
+                task_content = f.read()
+            
+            UI.info(f"读取任务文件: {task_file}")
+            UI.section("任务内容")
+            print(task_content[:500] + "..." if len(task_content) > 500 else task_content)
+            print()
+            
+            # 一次性执行任务
+            await run_single_task(leader, task_content)
+            return
+        except Exception as e:
+            UI.error(f"读取任务文件失败: {e}")
+            return
+    
+    # 检查是否有内联任务参数
+    if args and args[0] == "--task":
+        if len(args) < 2:
+            UI.error("请提供任务描述")
+            return
+        
+        task_content = " ".join(args[1:])
+        UI.info("执行任务: " + task_content[:100] + "..." )
+        await run_single_task(leader, task_content)
+        return
+    
+    # 否则进入交互式会话
     await run_leader_worker_session(ai_dir)
+
+
+async def run_single_task(leader, task_content: str):
+    """
+    执行单个任务（非交互式）
+    
+    Args:
+        leader: LeaderAI 实例
+        task_content: 任务内容
+    """
+    UI.section("开始执行任务")
+    print(f"Leader 模型: {leader.config.get('model')}")
+    print(f"Worker 模型: {leader.worker_config.get('model')}")
+    print()
+    
+    try:
+        # 初始化 MCP
+        await leader.mcp_manager.initialize()
+        UI.success("MCP 管理器初始化完成")
+        
+        # 执行任务
+        await leader.process_user_input(task_content)
+        
+        UI.section("任务执行完成")
+        leader.task_manager.show_progress()
+        
+    except KeyboardInterrupt:
+        print("\n任务已取消")
+    except Exception as e:
+        import traceback
+        UI.error(f"任务执行失败: {e}")
+        print(traceback.format_exc())
 
 
 def check_workspace() -> bool:

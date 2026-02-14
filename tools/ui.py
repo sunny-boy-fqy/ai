@@ -96,7 +96,9 @@ class UI:
 {cls.BOLD}Leader-Worker 模式:{cls.END}
   ai init              初始化当前目录(.ai文件夹)
   ai init --auto       使用全局配置自动初始化
-  ai work              进入Leader-Worker工作模式
+  ai work              进入Leader-Worker工作模式(交互式)
+  ai work --file <文件> 从文件执行任务(非交互式)
+  ai work --task <任务> 直接执行任务(非交互式)
 
 {cls.BOLD}对话:{cls.END}
   ai ask <问题>        即时问答
