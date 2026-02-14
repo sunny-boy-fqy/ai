@@ -286,6 +286,57 @@ class PluginManager:
             
             if p.required_env:
                 print(f"     {UI.DIM}需: {', '.join(p.required_env)}{UI.END}")
+    
+    @classmethod
+    async def show_capabilities(cls):
+        """显示当前可用的MCP工具/功能"""
+        UI.section("可用 MCP 工具/功能")
+        
+        installed = cls.list_installed()
+        
+        if not installed:
+            UI.warn("无已安装插件，使用 'ai install <名称>' 安装")
+            return
+        
+        total_tools = 0
+        for plugin_name, cfg in installed.items():
+            cmd = cfg.get("command", "npx")
+            args = cfg.get("args", [])
+            
+            if IS_WINDOWS and "npx" in cmd:
+                cmd = cmd.replace("npx", "npx.cmd")
+            
+            try:
+                from mcp import ClientSession, StdioServerParameters
+                from mcp.client.stdio import stdio_client
+                
+                params = StdioServerParameters(
+                    command=cmd,
+                    args=args,
+                    env=os.environ.copy(),
+                    stderr=subprocess.DEVNULL
+                )
+                
+                async with asyncio.timeout(10.0):
+                    async with stdio_client(params) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            result = await session.list_tools()
+                            tools = result.tools
+                            total_tools += len(tools)
+                            
+                            print(f"\n{UI.CYAN}◆ {plugin_name}{UI.END} ({len(tools)} 个工具)")
+                            for t in tools:
+                                desc = t.description[:60] + "..." if t.description and len(t.description) > 60 else (t.description or "")
+                                print(f"   {UI.GREEN}{t.name}{UI.END}")
+                                if desc:
+                                    print(f"      {UI.DIM}{desc}{UI.END}")
+            except asyncio.TimeoutError:
+                UI.warn(f"{plugin_name}: 连接超时")
+            except Exception as e:
+                UI.warn(f"{plugin_name}: {str(e)[:50]}")
+        
+        print(f"\n{UI.BOLD}总计: {len(installed)} 个插件, {total_tools} 个工具{UI.END}")
 
 
 # MCP工具管理器（用于调用）
