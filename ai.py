@@ -253,9 +253,25 @@ async def run_single_task(leader, task_content: str):
     print()
     
     try:
-        # 初始化 MCP
-        await leader.mcp_manager.initialize()
-        UI.success("MCP 管理器初始化完成")
+        # 静默初始化 MCP（隐藏服务器启动信息）
+        import sys
+        import os
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def suppress_output():
+            old_stdout = sys.stdout
+            try:
+                sys.stdout = open(os.devnull, 'w')
+                yield
+            finally:
+                sys.stdout.close()
+                sys.stdout = old_stdout
+        
+        with suppress_output():
+            await leader.mcp_manager.initialize(silent=True)
+        
+        UI.success(f"MCP 管理器初始化完成，已加载 {len(leader.mcp_manager.server_params)} 个插件")
         
         # 执行任务
         await leader.process_user_input(task_content)

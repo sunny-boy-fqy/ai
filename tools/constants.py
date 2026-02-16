@@ -183,15 +183,6 @@ BUILTIN_PLUGINS = {
         "install_args": ["-y", "@modelcontextprotocol/server-memory"],
         "verified": True,
     },
-    "thinking": {
-        "name": "thinking",
-        "npm_package": "@modelcontextprotocol/server-sequential-thinking",
-        "description": "思维链推理",
-        "capabilities": ["ai_ml"],
-        "install_cmd": "npx",
-        "install_args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-        "verified": True,
-    },
     "brave-search": {
         "name": "brave-search",
         "npm_package": "@modelcontextprotocol/server-brave-search",

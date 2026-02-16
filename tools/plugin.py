@@ -371,17 +371,34 @@ class PluginManager:
 class MCPToolManager:
     """MCP工具管理器"""
     
+    # 类变量：是否已显示启动提示
+    _startup_shown = False
+    
     def __init__(self):
         self.server_params = {}
+        self._initialized_servers = set()
     
-    async def initialize(self):
-        """初始化工具"""
+    async def initialize(self, silent: bool = True):
+        """
+        初始化工具
+        
+        Args:
+            silent: 是否静默模式（隐藏服务器启动信息）
+        """
         try:
             from mcp import StdioServerParameters
         except ImportError:
             return
         
         installed = PluginManager.list_installed()
+        
+        if not installed:
+            return
+        
+        # 只在第一次初始化时显示启动提示
+        if not MCPToolManager._startup_shown and not silent:
+            UI.info(f"正在初始化 {len(installed)} 个 MCP 插件...")
+        
         for name, cfg in installed.items():
             cmd = cfg.get("command", "npx")
             args = cfg.get("args", [])
@@ -390,15 +407,65 @@ class MCPToolManager:
                 cmd = cmd.replace("npx", "npx.cmd")
             
             try:
-                # 隐藏 MCP server 的 stderr 输出
+                # 隐藏 MCP server 的 stdout 和 stderr 输出
                 self.server_params[name] = StdioServerParameters(
                     command=cmd,
                     args=args,
                     env=os.environ.copy(),
                     stderr=subprocess.DEVNULL  # 隐藏服务器输出
                 )
-            except:
+                
+                if not MCPToolManager._startup_shown and not silent:
+                    UI.success(f"  ✓ {name}")
+                
+            except Exception:
                 pass
+        
+        if not MCPToolManager._startup_shown and not silent:
+            MCPToolManager._startup_shown = True
+    
+    def _suppress_stdout_context(self):
+        """
+        返回一个静默 stdout 输出的上下文管理器
+        
+        使用文件描述符级别的重定向，可以捕获子进程的输出
+        """
+        import sys
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def suppress():
+            # 保存原始 stdout 文件描述符
+            original_stdout_fd = os.dup(1)
+            original_stdout = sys.stdout
+            
+            try:
+                # 刷新缓冲区
+                sys.stdout.flush()
+                
+                # 打开 /dev/null
+                devnull_fd = os.open(os.devnull, os.O_WRONLY)
+                
+                # 重定向 stdout 到 /dev/null
+                os.dup2(devnull_fd, 1)
+                os.close(devnull_fd)
+                
+                # 更新 Python 的 sys.stdout
+                sys.stdout = open(os.devnull, 'w')
+                
+                yield
+            finally:
+                # 刷新并恢复
+                sys.stdout.flush()
+                os.dup2(original_stdout_fd, 1)
+                os.close(original_stdout_fd)
+                sys.stdout = original_stdout
+        
+        return suppress()
+    
+    def _get_silent_errlog(self):
+        """获取静默的 errlog 文件对象"""
+        return open(os.devnull, 'w')
     
     async def get_tools(self) -> List[dict]:
         """获取所有工具定义"""
@@ -411,20 +478,26 @@ class MCPToolManager:
         tools = []
         for name, params in self.server_params.items():
             try:
-                async with asyncio.timeout(10.0):
-                    async with stdio_client(params) as (read, write):
-                        async with ClientSession(read, write) as session:
-                            await session.initialize()
-                            result = await session.list_tools()
-                            for t in result.tools:
-                                tools.append({
-                                    "type": "function",
-                                    "function": {
-                                        "name": f"{name}__{t.name}",
-                                        "description": t.description,
-                                        "parameters": t.inputSchema
-                                    }
-                                })
+                # 静默调用，隐藏 MCP 服务器启动信息
+                with self._suppress_stdout_context():
+                    silent_errlog = self._get_silent_errlog()
+                    try:
+                        async with asyncio.timeout(10.0):
+                            async with stdio_client(params, errlog=silent_errlog) as (read, write):
+                                async with ClientSession(read, write) as session:
+                                    await session.initialize()
+                                    result = await session.list_tools()
+                                    for t in result.tools:
+                                        tools.append({
+                                            "type": "function",
+                                            "function": {
+                                                "name": f"{name}__{t.name}",
+                                                "description": t.description,
+                                                "parameters": t.inputSchema
+                                            }
+                                        })
+                    finally:
+                        silent_errlog.close()
             except:
                 pass
         return tools
@@ -445,11 +518,17 @@ class MCPToolManager:
             return f"未找到服务器: {server}"
         
         try:
-            async with asyncio.timeout(30.0):
-                async with stdio_client(self.server_params[server]) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        result = await session.call_tool(tool_name, args)
-                        return str(result.content)
+            # 静默调用，隐藏 MCP 服务器启动信息
+            with self._suppress_stdout_context():
+                silent_errlog = self._get_silent_errlog()
+                try:
+                    async with asyncio.timeout(30.0):
+                        async with stdio_client(self.server_params[server], errlog=silent_errlog) as (read, write):
+                            async with ClientSession(read, write) as session:
+                                await session.initialize()
+                                result = await session.call_tool(tool_name, args)
+                                return str(result.content)
+                finally:
+                    silent_errlog.close()
         except Exception as e:
             return f"调用失败: {e}"

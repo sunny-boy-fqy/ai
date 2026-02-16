@@ -49,8 +49,8 @@
 |------|------|
 | `filesystem__*` | 文件系统操作 |
 | `memory__*` | 知识图谱存储 |
-| `thinking__*` | 思维链推理 |
-| `shell__*` | Shell 命令执行 |
+| `mcp-shell-server__*` | Shell 命令执行 |
+| `playwright__*` | 浏览器自动化 |
 
 ## ✅ 任务完成标准
 

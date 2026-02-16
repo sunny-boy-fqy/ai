@@ -19,6 +19,7 @@ import time
 import random
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Set
+from contextlib import contextmanager
 from ..config_mgr import ConfigManager
 from ..plugin import PluginManager, MCPToolManager
 from ..ui import UI
@@ -27,6 +28,59 @@ from .input_handler import InputHandler
 
 # 导入日志模块
 from ..logger import debug, info, warn, error, api, task, set_log_level, DEBUG, INFO
+
+
+@contextmanager
+def suppress_stdout():
+    """
+    静默 stdout 输出的上下文管理器
+    
+    使用文件描述符级别的重定向，可以捕获子进程的输出
+    """
+    # 保存原始 stdout 文件描述符
+    original_stdout_fd = os.dup(1)
+    original_stdout = sys.stdout
+    
+    try:
+        # 刷新缓冲区
+        sys.stdout.flush()
+        
+        # 打开 /dev/null
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        
+        # 重定向 stdout 到 /dev/null
+        os.dup2(devnull_fd, 1)
+        os.close(devnull_fd)
+        
+        # 更新 Python 的 sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+        
+        yield
+    finally:
+        # 刷新并恢复
+        sys.stdout.flush()
+        os.dup2(original_stdout_fd, 1)
+        os.close(original_stdout_fd)
+        sys.stdout = original_stdout
+
+
+class MCPServerSuppressor:
+    """MCP 服务器输出抑制器"""
+    
+    _instance = None
+    _shown = False
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    @classmethod
+    def show_startup_message(cls, servers: List[str]):
+        """显示 MCP 服务器启动提示（只显示一次）"""
+        if not cls._shown and servers:
+            UI.info(f"MCP 管理器初始化完成，已加载 {len(servers)} 个插件")
+            cls._shown = True
 
 
 class ModelInterface:
@@ -537,6 +591,13 @@ class LeaderAI:
         self.task_manager = TaskManager(ai_dir)
         self.mcp_manager = MCPToolManager()
         
+        # MCP 工具权限管理
+        self._mcp_permissions = {
+            "allowed_plugins": set(),      # 永久允许的插件
+            "session_allowed": set(),      # 本次任务允许的插件
+            "denied_tools": set(),         # 本次拒绝的工具
+        }
+        
         # 读取指南
         self.leader_guide = self._load_guide("README_for_leader.md")
         self.worker_guide = self._load_guide("README_for_worker.md")
@@ -547,6 +608,97 @@ class LeaderAI:
         
         # 任务恢复：检查是否有未完成的任务
         self._check_pending_tasks()
+    
+    def _check_mcp_permission(self, tool_name: str) -> int:
+        """
+        检查 MCP 工具调用权限
+        
+        Returns:
+            0: 拒绝
+            1: 允许本次
+            2: 允许该插件所有命令
+            3: 本次任务永久允许
+        """
+        # 解析插件名
+        if "__" not in tool_name:
+            return 1  # 非 MCP 工具，直接允许
+        
+        plugin_name = tool_name.split("__")[0]
+        
+        # 检查是否已在拒绝列表
+        if tool_name in self._mcp_permissions["denied_tools"]:
+            return 0
+        
+        # 检查是否永久允许该插件
+        if plugin_name in self._mcp_permissions["allowed_plugins"]:
+            return 2
+        
+        # 检查是否本次任务允许
+        if plugin_name in self._mcp_permissions["session_allowed"]:
+            return 3
+        
+        # 需要用户确认
+        return -1
+    
+    def _request_mcp_permission(self, tool_name: str, args: dict) -> int:
+        """
+        请求用户确认 MCP 工具调用
+        
+        Returns:
+            0: 拒绝
+            1: 允许本次
+            2: 允许该插件所有命令
+            3: 本次任务永久允许
+        """
+        plugin_name = tool_name.split("__")[0] if "__" in tool_name else "unknown"
+        tool_action = tool_name.split("__")[1] if "__" in tool_name else tool_name
+        
+        # 格式化参数显示
+        args_str = ""
+        if args:
+            for key, value in list(args.items())[:5]:  # 只显示前5个参数
+                value_str = str(value)
+                if len(value_str) > 100:
+                    value_str = value_str[:100] + "..."
+                args_str += f"    {key}: {value_str}\n"
+            if len(args) > 5:
+                args_str += f"    ... (共 {len(args)} 个参数)\n"
+        
+        print()
+        UI.section("🔒 MCP 工具调用确认")
+        print(f"  插件: {UI.CYAN}{plugin_name}{UI.END}")
+        print(f"  工具: {UI.GREEN}{tool_action}{UI.END}")
+        if args_str:
+            print(f"  参数:")
+            print(args_str.rstrip())
+        print()
+        print(f"  {UI.BOLD}请选择操作:{UI.END}")
+        print(f"    {UI.RED}1. 拒绝{UI.END} - 不执行此操作")
+        print(f"    {UI.YELLOW}2. 本次允许{UI.END} - 仅允许本次调用")
+        print(f"    {UI.GREEN}3. 允许该插件所有命令{UI.END} - 本次任务中信任此插件")
+        print(f"    {UI.CYAN}4. 允许所有插件{UI.END} - 本次任务不再询问")
+        print()
+        
+        while True:
+            try:
+                choice = input(f"  请选择 [1-4]: ").strip()
+                if choice == "1":
+                    return 0
+                elif choice == "2":
+                    return 1
+                elif choice == "3":
+                    plugin_name = tool_name.split("__")[0] if "__" in tool_name else ""
+                    if plugin_name:
+                        self._mcp_permissions["allowed_plugins"].add(plugin_name)
+                    return 2
+                elif choice == "4":
+                    self._mcp_permissions["session_allowed"].add("__all__")
+                    return 3
+                else:
+                    UI.warn("请输入 1-4")
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
     
     def _check_pending_tasks(self):
         """检查未完成的任务（任务恢复功能）"""
@@ -611,7 +763,9 @@ class LeaderAI:
             tasks_summary = "\n当前任务列表:\n"
             for t in tasks[:10]:  # 只显示前10个
                 status_icon = {"pending": "○", "in_progress": "◐", "completed": "●", "failed": "✗"}.get(t.get("status"), "○")
-                tasks_summary += f"  {status_icon} {t.get('id')}: {t.get('title')}\n"
+                deps = t.get("dependencies", [])
+                deps_str = f" [依赖: {', '.join(deps)}]" if deps else ""
+                tasks_summary += f"  {status_icon} {t.get('id')}: {t.get('title')}{deps_str}\n"
         
         return f"""你是 Leader AI，负责任务规划和协调。
 
@@ -632,6 +786,23 @@ class LeaderAI:
 - **禁止直接使用 MCP 工具执行代码编写任务**（如 write_file）
 - 所有执行类任务必须通过 `assign_task` 分配给 Worker AI
 - 你只负责：规划、创建任务、分配任务、监控进度、汇报结果
+
+## 🔗 任务依赖机制
+
+创建任务时可以指定 `dependencies` 参数，表示该任务依赖的其他任务：
+- 只有当所有依赖任务完成后，当前任务才会被执行
+- 使用 `assign_tasks_parallel` 时，系统会自动检测依赖并按顺序执行
+- 系统还会自动检测文件冲突，避免多个 Worker 同时修改同一文件
+
+**示例**：
+```json
+{{
+  "title": "测试用户模块",
+  "description": "编写用户模块的单元测试",
+  "dependencies": ["task_001"],  // 等待 task_001 完成
+  "files_to_modify": ["tests/test_user.py"]
+}}
+```
 
 当前任务状态:
 {json.dumps(self.task_manager.get_statistics(), ensure_ascii=False, indent=2)}
@@ -739,8 +910,12 @@ class LeaderAI:
             UI.error("Leader AI 未正确配置")
             return
         
-        # 初始化 MCP 工具
-        await self.mcp_manager.initialize()
+        # 静默初始化 MCP 工具（隐藏服务器启动信息）
+        with suppress_stdout():
+            await self.mcp_manager.initialize(silent=True)
+        
+        # 显示 MCP 启动提示
+        MCPServerSuppressor.show_startup_message(list(self.mcp_manager.server_params.keys()))
         
         UI.section("Leader AI 会话")
         print(f"  项目目录: {self.root_dir}")
@@ -867,10 +1042,16 @@ class LeaderAI:
                         description=args.get("description", ""),
                         task_type=args.get("type", "code"),
                         priority=args.get("priority", 3),
+                        dependencies=args.get("dependencies", []),
                         files_to_modify=args.get("files_to_modify", []),
                         acceptance_criteria=args.get("acceptance_criteria", [])
                     )
-                    result = f"任务已创建: {task['id']}\n标题: {task['title']}\n请使用 assign_task 工具将此任务分配给 Worker AI 执行。"
+                    
+                    # 构建结果消息
+                    result = f"任务已创建: {task['id']}\n标题: {task['title']}"
+                    if task.get("dependencies"):
+                        result += f"\n依赖: {', '.join(task['dependencies'])}"
+                    result += "\n请使用 assign_task 工具将此任务分配给 Worker AI 执行。"
                     UI.success(f"任务已创建: {task['id']}")
                 
                 elif name == "assign_task":
@@ -883,18 +1064,25 @@ class LeaderAI:
                     elif task.get("status") != "pending":
                         result = f"错误: 任务 {task_id} 状态为 {task.get('status')}，不是待处理状态"
                     else:
-                        # 分配任务给 Worker 执行
-                        result = await self._assign_task_to_worker(task, instructions)
+                        # 检查依赖是否满足
+                        dependencies = task.get("dependencies", [])
+                        unmet_deps = self._check_unmet_dependencies(dependencies)
+                        
+                        if unmet_deps:
+                            result = f"错误: 任务 {task_id} 的依赖未满足\n未完成的依赖: {', '.join(unmet_deps)}\n请先完成依赖任务。"
+                        else:
+                            # 分配任务给 Worker 执行
+                            result = await self._assign_task_to_worker(task, instructions)
                 
                 elif name == "assign_tasks_parallel":
-                    # 并行分配多个任务
+                    # 并行分配多个任务（带智能调度）
                     task_ids = args.get("task_ids", [])
                     max_concurrent = args.get("max_concurrent", 3)
                     
                     if not task_ids:
                         result = "错误: 未提供任务ID列表"
                     else:
-                        result = await self._assign_tasks_parallel(task_ids, max_concurrent)
+                        result = await self._assign_tasks_parallel_smart(task_ids, max_concurrent)
                 
                 elif name == "list_tasks":
                     status_filter = args.get("status", "all")
@@ -909,7 +1097,11 @@ class LeaderAI:
                         lines = [f"任务列表 ({len(tasks)}个):\n"]
                         for t in tasks:
                             status_icon = {"pending": "○", "in_progress": "◐", "completed": "●", "failed": "✗"}.get(t.get("status"), "○")
-                            lines.append(f"  {status_icon} {t['id']}: {t['title']} [{t.get('status', 'unknown')}]")
+                            deps = t.get("dependencies", [])
+                            deps_str = f" [依赖: {', '.join(deps)}]" if deps else ""
+                            files = t.get("files_to_modify", [])
+                            files_str = f" [文件: {len(files)}个]" if files else ""
+                            lines.append(f"  {status_icon} {t['id']}: {t['title']} [{t.get('status', 'unknown')}]{deps_str}{files_str}")
                         result = "\n".join(lines)
                 
                 elif name == "get_task_result":
@@ -967,7 +1159,7 @@ class LeaderAI:
                 "type": "function",
                 "function": {
                     "name": "create_task",
-                    "description": "创建一个新任务。Leader 必须先用此工具创建任务，再分配给 Worker。",
+                    "description": "创建一个新任务。Leader 必须先用此工具创建任务，再分配给 Worker。支持设置任务依赖，只有依赖任务完成后才会执行当前任务。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -975,7 +1167,8 @@ class LeaderAI:
                             "description": {"type": "string", "description": "任务详细描述"},
                             "type": {"type": "string", "enum": ["code", "doc", "config", "test", "review", "refactor", "fix"], "description": "任务类型"},
                             "priority": {"type": "integer", "minimum": 1, "maximum": 5, "description": "优先级（1最高，5最低）"},
-                            "files_to_modify": {"type": "array", "items": {"type": "string"}, "description": "需要修改的文件路径列表"},
+                            "dependencies": {"type": "array", "items": {"type": "string"}, "description": "依赖的任务ID列表，这些任务必须完成后当前任务才能执行"},
+                            "files_to_modify": {"type": "array", "items": {"type": "string"}, "description": "需要修改的文件路径列表（用于检测并发冲突）"},
                             "acceptance_criteria": {"type": "array", "items": {"type": "string"}, "description": "验收标准"}
                         },
                         "required": ["title", "description"]
@@ -1081,6 +1274,103 @@ class LeaderAI:
                 }
             }
         ]
+    
+    def _check_unmet_dependencies(self, dependencies: List[str]) -> List[str]:
+        """
+        检查未满足的依赖
+        
+        Args:
+            dependencies: 依赖任务ID列表
+            
+        Returns:
+            未完成的依赖任务ID列表
+        """
+        unmet = []
+        for dep_id in dependencies:
+            dep_task = self.task_manager.get_task(dep_id)
+            if not dep_task or dep_task.get("status") != "completed":
+                unmet.append(dep_id)
+        return unmet
+    
+    def _detect_file_conflicts(self, tasks: List[Dict]) -> Dict[str, List[str]]:
+        """
+        检测任务间的文件冲突
+        
+        Args:
+            tasks: 任务列表
+            
+        Returns:
+            冲突映射: {文件路径: [冲突的任务ID列表]}
+        """
+        file_to_tasks = {}
+        
+        for task in tasks:
+            files = task.get("files_to_modify", [])
+            for f in files:
+                if f not in file_to_tasks:
+                    file_to_tasks[f] = []
+                file_to_tasks[f].append(task["id"])
+        
+        # 只保留有冲突的文件
+        conflicts = {f: task_ids for f, task_ids in file_to_tasks.items() if len(task_ids) > 1}
+        return conflicts
+    
+    def _get_execution_groups(self, tasks: List[Dict]) -> List[List[Dict]]:
+        """
+        根据依赖关系将任务分组，每组内的任务可以并行执行
+        
+        Args:
+            tasks: 任务列表
+            
+        Returns:
+            执行分组列表，每组内的任务互不依赖
+        """
+        if not tasks:
+            return []
+        
+        # 构建任务ID到任务的映射
+        task_map = {t["id"]: t for t in tasks}
+        task_ids = set(task_map.keys())
+        
+        # 构建依赖图
+        dependencies = {}
+        for t in tasks:
+            deps = set(t.get("dependencies", []))
+            # 只考虑列表内的依赖
+            dependencies[t["id"]] = deps & task_ids
+        
+        # 检测文件冲突，将冲突的任务视为互相依赖
+        conflicts = self._detect_file_conflicts(tasks)
+        for file_path, conflicting_ids in conflicts.items():
+            for i, tid1 in enumerate(conflicting_ids):
+                for tid2 in conflicting_ids[i+1:]:
+                    # 添加双向依赖（视为冲突）
+                    dependencies[tid1].add(tid2)
+                    dependencies[tid2].add(tid1)
+        
+        # 拓扑排序分组
+        groups = []
+        remaining = set(task_ids)
+        completed = set()
+        
+        while remaining:
+            # 找出所有依赖已满足的任务
+            ready = []
+            for tid in remaining:
+                if dependencies[tid] <= completed:
+                    ready.append(task_map[tid])
+            
+            if not ready:
+                # 存在循环依赖，强制选一个（不应该发生，但作为保险）
+                warn(f"检测到循环依赖，强制选择任务: {remaining}")
+                ready = [task_map[next(iter(remaining))]]
+            
+            groups.append(ready)
+            for t in ready:
+                completed.add(t["id"])
+                remaining.discard(t["id"])
+        
+        return groups
     
     def _format_search_results(self, results: list) -> str:
         """格式化搜索结果"""
@@ -1199,7 +1489,18 @@ class LeaderAI:
     
     async def _assign_tasks_parallel(self, task_ids: List[str], max_concurrent: int = 3) -> str:
         """
-        并行分配多个任务给 Worker 执行
+        并行分配多个任务给 Worker 执行（已弃用，请使用 _assign_tasks_parallel_smart）
+        """
+        return await self._assign_tasks_parallel_smart(task_ids, max_concurrent)
+    
+    async def _assign_tasks_parallel_smart(self, task_ids: List[str], max_concurrent: int = 3) -> str:
+        """
+        智能并行分配多个任务给 Worker 执行
+        
+        特性：
+        1. 自动检测任务依赖，按依赖顺序执行
+        2. 检测文件冲突，避免多个 Worker 同时修改同一文件
+        3. 自动分组并行执行无冲突的任务
         
         Args:
             task_ids: 任务ID列表
@@ -1214,21 +1515,52 @@ class LeaderAI:
         # 获取所有待处理任务
         tasks = []
         invalid_ids = []
+        dependency_blocked = []
+        
+        all_tasks = self.task_manager.get_all_tasks()
+        task_status = {t["id"]: t.get("status") for t in all_tasks}
         
         for task_id in task_ids:
             task = self.task_manager.get_task(task_id)
-            if task and task.get("status") == "pending":
-                tasks.append(task)
-            else:
+            if not task:
                 invalid_ids.append(task_id)
+            elif task.get("status") != "pending":
+                invalid_ids.append(f"{task_id}(状态:{task.get('status')})")
+            else:
+                # 检查依赖是否满足（检查所有依赖，不只是列表内的）
+                dependencies = task.get("dependencies", [])
+                unmet_deps = [d for d in dependencies if task_status.get(d) != "completed"]
+                
+                if unmet_deps:
+                    dependency_blocked.append(f"{task_id}(依赖:{','.join(unmet_deps)})")
+                else:
+                    tasks.append(task)
         
+        # 构建结果消息
+        messages = []
         if invalid_ids:
-            warn(f"以下任务ID无效或非待处理状态: {', '.join(invalid_ids)}")
+            messages.append(f"无效任务: {', '.join(invalid_ids)}")
+        if dependency_blocked:
+            messages.append(f"依赖未满足: {', '.join(dependency_blocked)}")
         
         if not tasks:
-            return "错误: 没有有效的待处理任务"
+            return "错误: 没有可执行的任务\n" + "\n".join(messages)
         
-        info(f"开始并行执行 {len(tasks)} 个任务（最大并发: {max_concurrent}）")
+        if messages:
+            info("\n".join(messages))
+        
+        # 检测文件冲突
+        conflicts = self._detect_file_conflicts(tasks)
+        if conflicts:
+            conflict_info = []
+            for f, task_ids in conflicts.items():
+                conflict_info.append(f"  {f}: {', '.join(task_ids)}")
+            info(f"检测到文件冲突:\n" + "\n".join(conflict_info))
+        
+        # 按依赖和冲突分组
+        execution_groups = self._get_execution_groups(tasks)
+        
+        info(f"开始执行 {len(tasks)} 个任务，分为 {len(execution_groups)} 批（最大并发: {max_concurrent}）")
         
         # 使用信号量控制并发
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -1236,7 +1568,7 @@ class LeaderAI:
         
         async def execute_with_semaphore(task: Dict):
             async with semaphore:
-                task(f"Worker 开始: {task['title']}")
+                task_log(f"Worker 开始: {task['title']}")
                 self.task_manager.set_task_status(task["id"], "in_progress")
                 
                 worker = WorkerAI(
@@ -1256,9 +1588,26 @@ class LeaderAI:
                     self.task_manager.set_task_status(task["id"], "failed", error=result)
                     results[task["id"]] = f"❌ 失败: {result[:100]}"
         
-        # 并行执行
+        # 分批执行
         start_time = time.time()
-        await asyncio.gather(*[execute_with_semaphore(t) for t in tasks])
+        
+        for group_idx, group in enumerate(execution_groups):
+            if len(execution_groups) > 1:
+                info(f"执行第 {group_idx + 1}/{len(execution_groups)} 批任务 ({len(group)} 个)")
+            
+            # 检查这批任务是否有前置失败导致依赖不满足
+            ready_tasks = []
+            for t in group:
+                deps = t.get("dependencies", [])
+                failed_deps = [d for d in deps if results.get(d, "").startswith("❌")]
+                if failed_deps:
+                    results[t["id"]] = f"⏭️ 跳过: 依赖任务失败 ({', '.join(failed_deps)})"
+                else:
+                    ready_tasks.append(t)
+            
+            if ready_tasks:
+                await asyncio.gather(*[execute_with_semaphore(t) for t in ready_tasks])
+        
         elapsed = time.time() - start_time
         
         # 显示进度
@@ -1266,14 +1615,21 @@ class LeaderAI:
         
         # 汇总结果
         completed = sum(1 for r in results.values() if "✅" in r)
-        failed = len(tasks) - completed
+        failed = sum(1 for r in results.values() if "❌" in r)
+        skipped = sum(1 for r in results.values() if "⏭️" in r)
         
-        summary = f"\n并行执行完成 (耗时: {elapsed:.1f}秒)\n"
+        summary = f"\n执行完成 (耗时: {elapsed:.1f}秒)\n"
         summary += f"  成功: {completed}/{len(tasks)}\n"
         summary += f"  失败: {failed}/{len(tasks)}\n"
+        if skipped > 0:
+            summary += f"  跳过: {skipped}/{len(tasks)}\n"
+        if dependency_blocked:
+            summary += f"  依赖阻塞: {len(dependency_blocked)}\n"
         
-        for task_id, result in results.items():
-            summary += f"  - {task_id}: {result}\n"
+        summary += "\n任务结果:\n"
+        for task_id in task_ids:
+            if task_id in results:
+                summary += f"  - {task_id}: {results[task_id]}\n"
         
         return summary
     
