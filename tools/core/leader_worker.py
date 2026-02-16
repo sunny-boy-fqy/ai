@@ -8,6 +8,7 @@ AI CLI Leader-Worker 核心
 - 智能上下文管理
 - 并发 Worker 执行
 - 进度可视化
+- 后台任务执行与非阻塞交互
 """
 
 import os
@@ -17,9 +18,12 @@ import re
 import asyncio
 import time
 import random
+import threading
+import queue
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Callable
 from contextlib import contextmanager
+from concurrent.futures import Future
 from ..config_mgr import ConfigManager
 from ..plugin import PluginManager, MCPToolManager
 from ..ui import UI
@@ -28,6 +32,188 @@ from .input_handler import InputHandler
 
 # 导入日志模块
 from ..logger import debug, info, warn, error, api, task, set_log_level, DEBUG, INFO
+
+
+class OutputCollector:
+    """输出收集器 - 收集 Worker 的输出"""
+    
+    def __init__(self):
+        self.lines: List[str] = []
+        self.lock = threading.Lock()
+    
+    def write(self, line: str):
+        """写入一行输出"""
+        with self.lock:
+            self.lines.append(line)
+    
+    def get_output(self) -> str:
+        """获取所有输出"""
+        with self.lock:
+            return "\n".join(self.lines)
+    
+    def clear(self):
+        """清空输出"""
+        with self.lock:
+            self.lines.clear()
+
+
+class BackgroundTaskManager:
+    """后台任务管理器 - 支持非阻塞任务执行"""
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        
+        self.tasks: Dict[str, Dict] = {}  # task_id -> task_info
+        self.output_collectors: Dict[str, OutputCollector] = {}
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.thread: Optional[threading.Thread] = None
+        self.running = False
+        self.message_queue = queue.Queue()  # 用于跨线程通信
+        self._lock = threading.Lock()
+    
+    def start(self):
+        """启动后台事件循环"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self.thread.start()
+        
+        # 等待事件循环启动
+        time.sleep(0.1)
+    
+    def _run_event_loop(self):
+        """运行事件循环（在后台线程中）"""
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        try:
+            self.loop.run_forever()
+        finally:
+            self.loop.close()
+    
+    def stop(self):
+        """停止后台事件循环"""
+        if self.loop and self.running:
+            self.running = False
+            self.loop.call_soon_threadsafe(self.loop.stop)
+    
+    def submit_task(self, task_id: str, coro: Callable, on_complete: Callable = None) -> Future:
+        """
+        提交任务到后台执行
+        
+        Args:
+            task_id: 任务ID
+            coro: 协程函数
+            on_complete: 完成回调
+            
+        Returns:
+            Future 对象
+        """
+        if not self.running:
+            self.start()
+        
+        output_collector = OutputCollector()
+        self.output_collectors[task_id] = output_collector
+        
+        task_info = {
+            "id": task_id,
+            "status": "running",
+            "started_at": datetime.now().isoformat(),
+            "output_collector": output_collector,
+            "future": None,
+        }
+        
+        with self._lock:
+            self.tasks[task_id] = task_info
+        
+        # 在后台线程中执行协程
+        future = asyncio.run_coroutine_threadsafe(
+            self._wrap_task(task_id, coro, on_complete),
+            self.loop
+        )
+        task_info["future"] = future
+        
+        return future
+    
+    async def _wrap_task(self, task_id: str, coro: Callable, on_complete: Callable):
+        """包装任务，处理输出和状态"""
+        try:
+            result = await coro
+            
+            with self._lock:
+                if task_id in self.tasks:
+                    self.tasks[task_id]["status"] = "completed"
+                    self.tasks[task_id]["completed_at"] = datetime.now().isoformat()
+                    self.tasks[task_id]["result"] = result
+            
+            # 发送完成消息
+            self.message_queue.put({
+                "type": "task_complete",
+                "task_id": task_id,
+                "success": True,
+                "result": result
+            })
+            
+            if on_complete:
+                on_complete(task_id, True, result)
+                
+        except Exception as e:
+            with self._lock:
+                if task_id in self.tasks:
+                    self.tasks[task_id]["status"] = "failed"
+                    self.tasks[task_id]["error"] = str(e)
+            
+            self.message_queue.put({
+                "type": "task_complete",
+                "task_id": task_id,
+                "success": False,
+                "error": str(e)
+            })
+            
+            if on_complete:
+                on_complete(task_id, False, str(e))
+    
+    def get_task_status(self, task_id: str) -> Optional[Dict]:
+        """获取任务状态"""
+        with self._lock:
+            return self.tasks.get(task_id)
+    
+    def get_all_running_tasks(self) -> List[Dict]:
+        """获取所有运行中的任务"""
+        with self._lock:
+            return [
+                {"id": tid, **t} 
+                for tid, t in self.tasks.items() 
+                if t["status"] == "running"
+            ]
+    
+    def get_output(self, task_id: str) -> str:
+        """获取任务的输出"""
+        collector = self.output_collectors.get(task_id)
+        return collector.get_output() if collector else ""
+    
+    def get_pending_messages(self) -> List[Dict]:
+        """获取待处理的消息（非阻塞）"""
+        messages = []
+        try:
+            while True:
+                msg = self.message_queue.get_nowait()
+                messages.append(msg)
+        except queue.Empty:
+            pass
+        return messages
 
 
 @contextmanager
@@ -920,17 +1106,23 @@ class LeaderAI:
         return True
     
     async def start_session(self):
-        """启动 Leader 会话"""
+        """启动 Leader 会话（非阻塞模式）"""
         if not self.is_ready():
             UI.error("Leader AI 未正确配置")
             return
         
-        # 静默初始化 MCP 工具（隐藏服务器启动信息）
+        # 静默初始化 MCP 工具
         with suppress_stdout():
             await self.mcp_manager.initialize(silent=True)
         
         # 显示 MCP 启动提示
         MCPServerSuppressor.show_startup_message(list(self.mcp_manager.server_params.keys()))
+        
+        # 初始化后台任务管理器
+        self.bg_manager = BackgroundTaskManager()
+        self.bg_manager.start()
+        self._pending_leader_task: Optional[str] = None
+        self._leader_output_buffer: List[str] = []
         
         UI.section("Leader AI 会话")
         print(f"  项目目录: {self.root_dir}")
@@ -943,44 +1135,225 @@ class LeaderAI:
         print("    - 或输入 \"\"\" 开始多行块，再输入 \"\"\" 结束")
         print()
         print("  命令:")
-        print("    - exit: 退出")
-        print("    - status: 查看进度")
+        print("    - exit/quit: 退出")
+        print("    - status: 查看任务进度")
+        print("    - tasks: 查看后台任务")
+        print("    - output <id>: 查看任务输出")
         print("    - clear: 清空已完成的任务")
+        print("    - set leader <model>: 设置 Leader 模型")
+        print("    - set worker <model>: 设置 Worker 模型")
+        print("    - config: 显示当前配置")
         print()
         
         input_handler = InputHandler("", allow_multiline=True)
         
+        # 创建事件循环用于处理异步任务
+        loop = asyncio.new_event_loop()
+        
         while True:
             try:
+                # 检查后台任务消息
+                self._check_background_messages()
+                
+                # 非阻塞输入检查
                 print(f"{UI.CYAN}Leader>{UI.END} ", end="", flush=True)
                 user_input = input_handler.get_input()
                 
                 if not user_input:
                     continue
                 
-                if user_input.lower() in ["exit", "quit"]:
+                # 解析命令
+                cmd = user_input.lower().strip()
+                parts = user_input.strip().split(maxsplit=2)
+                
+                if cmd in ["exit", "quit"]:
+                    self.bg_manager.stop()
                     break
                 
-                if user_input.lower() == "status":
+                elif cmd == "status":
                     self.task_manager.show_progress()
+                    self._show_background_tasks()
                     continue
                 
-                if user_input.lower() == "clear":
+                elif cmd == "tasks":
+                    self._show_background_tasks()
+                    continue
+                
+                elif cmd.startswith("output "):
+                    task_id = user_input.strip().split(maxsplit=1)[1] if len(parts) > 1 else None
+                    if task_id:
+                        self._show_task_output(task_id)
+                    continue
+                
+                elif cmd == "clear":
                     self.task_manager.clear_completed_tasks()
-                    # 同时清空对话历史
                     system_prompt = self._build_system_prompt()
                     self.messages = [{"role": "system", "content": system_prompt}]
                     self._save_history()
                     UI.success("已清空任务和对话历史")
                     continue
                 
-                # 处理用户输入
-                await self.process_user_input(user_input)
+                elif cmd.startswith("set leader"):
+                    if len(parts) >= 3:
+                        model = parts[2]
+                        self._set_leader_model(model)
+                    else:
+                        UI.error("用法: set leader <model>")
+                    continue
+                
+                elif cmd.startswith("set worker"):
+                    if len(parts) >= 3:
+                        model = parts[2]
+                        self._set_worker_model(model)
+                    else:
+                        UI.error("用法: set worker <model>")
+                    continue
+                
+                elif cmd == "config":
+                    self._show_config()
+                    continue
+                
+                # 处理用户输入（在后台线程中运行）
+                self._process_user_input_async(user_input, loop)
                 
             except KeyboardInterrupt:
                 print("\n")
+                self.bg_manager.stop()
                 break
+        
+        loop.close()
     
+    def _check_background_messages(self):
+        """检查后台任务消息"""
+        messages = self.bg_manager.get_pending_messages()
+        for msg in messages:
+            if msg["type"] == "task_complete":
+                task_id = msg["task_id"]
+                success = msg["success"]
+                
+                print()  # 换行
+                
+                if success:
+                    result = msg.get("result", ("", ""))[1] if isinstance(msg.get("result"), tuple) else msg.get("result", "")
+                    result_preview = str(result)[:200] if result else "完成"
+                    UI.success(f"后台任务 {task_id} 完成: {result_preview}")
+                else:
+                    UI.error(f"后台任务 {task_id} 失败: {msg.get('error', '未知错误')}")
+                
+                print(f"{UI.CYAN}Leader>{UI.END} ", end="", flush=True)
+    
+    def _show_background_tasks(self):
+        """显示后台任务状态"""
+        tasks = self.bg_manager.get_all_running_tasks()
+        
+        if not tasks:
+            UI.info("没有正在运行的后台任务")
+            return
+        
+        print()
+        UI.section("后台任务")
+        for t in tasks:
+            elapsed = (datetime.now() - datetime.fromisoformat(t.get("started_at", datetime.now().isoformat()))).total_seconds()
+            print(f"  {UI.CYAN}●{UI.END} {t['id']} (运行中, {elapsed:.1f}s)")
+        print()
+    
+    def _show_task_output(self, task_id: str):
+        """显示任务输出"""
+        output = self.bg_manager.get_output(task_id)
+        if output:
+            print()
+            UI.section(f"任务输出: {task_id}")
+            print(output[:1000] + "..." if len(output) > 1000 else output)
+            print()
+        else:
+            UI.info(f"任务 {task_id} 暂无输出")
+    
+    def _process_user_input_async(self, user_input: str, loop: asyncio.AbstractEventLoop):
+        """在后台处理用户输入"""
+        task_id = f"leader_{datetime.now().strftime('%H%M%S')}"
+        
+        # 创建输出收集器
+        output_collector = self.bg_manager.output_collectors.get(task_id)
+        if not output_collector:
+            output_collector = OutputCollector()
+            self.bg_manager.output_collectors[task_id] = output_collector
+        
+        async def run_process():
+            # 重定向 stdout 到收集器
+            import io
+            old_stdout = sys.stdout
+            sys.stdout = OutputWriter(output_collector, old_stdout)
+            
+            try:
+                await self.process_user_input(user_input)
+            finally:
+                sys.stdout = old_stdout
+        
+        # 提交到后台执行
+        def on_complete(tid, success, result):
+            pass  # 消息会在 _check_background_messages 中处理
+        
+        self.bg_manager.submit_task(task_id, run_process(), on_complete)
+        UI.info(f"任务已提交: {task_id} (使用 'output {task_id}' 查看输出)")
+    
+    def _set_leader_model(self, model: str):
+        """设置 Leader 模型"""
+        self.config["model"] = model
+        
+        # 保存配置
+        config_file = os.path.join(self.ai_dir, "leader_model.config")
+        try:
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, ensure_ascii=False, indent=2)
+            UI.success(f"Leader 模型已设置为: {model}")
+            
+            # 重新初始化模型接口
+            self.model = ModelInterface(self.config)
+        except Exception as e:
+            UI.error(f"设置失败: {e}")
+    
+    def _set_worker_model(self, model: str):
+        """设置 Worker 模型"""
+        self.worker_config["model"] = model
+        
+        # 保存配置
+        config_file = os.path.join(self.ai_dir, "worker_model.config")
+        try:
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.worker_config, f, ensure_ascii=False, indent=2)
+            UI.success(f"Worker 模型已设置为: {model}")
+            
+            # 重新初始化模型接口
+            self.worker_model = ModelInterface(self.worker_config)
+        except Exception as e:
+            UI.error(f"设置失败: {e}")
+    
+    def _show_config(self):
+        """显示当前配置"""
+        print()
+        UI.section("当前配置")
+        print(f"  Leader 模型: {self.config.get('model', '未设置')}")
+        print(f"  Leader API: {self.config.get('base_url', '未设置')}")
+        print(f"  Worker 模型: {self.worker_config.get('model', '未设置')}")
+        print(f"  Worker API: {self.worker_config.get('base_url', '未设置')}")
+        print()
+
+
+class OutputWriter:
+    """输出写入器 - 同时写入收集器和原始 stdout"""
+    
+    def __init__(self, collector: OutputCollector, original_stdout):
+        self.collector = collector
+        self.original_stdout = original_stdout
+    
+    def write(self, text):
+        self.collector.write(text)
+        # 不直接输出到 stdout，保持非阻塞
+    
+    def flush(self):
+        pass
+
+
     async def process_user_input(self, user_input: str):
         """处理用户输入（修复P0：使用持久化的上下文记忆）"""
         # 获取 MCP 工具定义
@@ -1583,7 +1956,7 @@ class LeaderAI:
         
         async def execute_with_semaphore(task: Dict):
             async with semaphore:
-                task_log(f"Worker 开始: {task['title']}")
+                task(f"Worker 开始: {task['title']}")
                 self.task_manager.set_task_status(task["id"], "in_progress")
                 
                 worker = WorkerAI(
