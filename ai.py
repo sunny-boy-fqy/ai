@@ -19,6 +19,9 @@ from tools.chat import ChatEngine
 from tools.set_workspace import WorkspaceManager
 from tools.ui import UI
 
+# 导入日志模块
+from tools.logger import set_log_level, DEBUG, INFO
+
 # 导入 Leader-Worker 模块
 from tools.core.init import AIInitializer
 from tools.core.leader_worker import LeaderAI, run_leader_worker_session
@@ -135,6 +138,18 @@ def handle_init(args):
 
 async def handle_work(args):
     """处理 work 命令 - 启动 Leader-Worker 会话"""
+    # 解析参数
+    debug_mode = "--debug" in args or "-d" in args
+    resume_mode = "--resume" in args or "-r" in args
+    
+    # 过滤掉参数标志
+    args = [a for a in args if a not in ["--debug", "-d", "--resume", "-r"]]
+    
+    # 设置日志级别
+    if debug_mode:
+        set_log_level(DEBUG)
+        UI.info("调试模式已启用")
+    
     # 获取当前目录
     current_dir = os.getcwd()
     
@@ -157,6 +172,29 @@ async def handle_work(args):
     if not leader.is_ready():
         UI.error("Leader AI 配置不完整，请运行 'ai init' 重新配置")
         return
+    
+    # 检查是否需要恢复任务
+    if resume_mode:
+        pending_tasks = leader.task_manager.get_tasks_by_status("in_progress")
+        pending_tasks.extend(leader.task_manager.get_tasks_by_status("pending"))
+        
+        if pending_tasks:
+            UI.section(f"发现 {len(pending_tasks)} 个未完成的任务")
+            leader.task_manager.show_progress()
+            
+            if UI.confirm("是否继续执行这些任务？", default=True):
+                # 将第一个进行中的任务状态重置为待处理
+                for task in pending_tasks:
+                    if task.get("status") == "in_progress":
+                        leader.task_manager.set_task_status(task["id"], "pending")
+                
+                UI.info("任务状态已恢复，继续执行...")
+            else:
+                UI.info("已取消任务恢复")
+                return
+        else:
+            UI.info("没有未完成的任务")
+            return
     
     # 检查是否有任务文件参数
     if args and args[0] == "--file":
@@ -246,8 +284,15 @@ def main():
     if not args:
         UI.show_help()
         return
+    
+    # 检查全局 debug 参数
+    debug_mode = "--debug" in args or "-d" in args
+    if debug_mode:
+        args = [a for a in args if a not in ["--debug", "-d"]]
+        set_log_level(DEBUG)
+        UI.info("调试模式已启用")
 
-    cmd = args[0].lower()
+    cmd = args[0].lower() if args else ""
 
     # 初始化配置
     ConfigManager.init()

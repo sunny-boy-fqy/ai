@@ -1,6 +1,13 @@
 """
-AI CLI Leader-Worker 核心（已修复 MCP 工具调用）
+AI CLI Leader-Worker 核心
 实现 Leader AI 和 Worker AI 的协作机制
+
+功能特性:
+- API 调用自动重试
+- 任务恢复（中断后可继续）
+- 智能上下文管理
+- 并发 Worker 执行
+- 进度可视化
 """
 
 import os
@@ -8,17 +15,27 @@ import sys
 import json
 import re
 import asyncio
+import time
+import random
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 from ..config_mgr import ConfigManager
 from ..plugin import PluginManager, MCPToolManager
 from ..ui import UI
 from .task_manager import TaskManager
 from .input_handler import InputHandler
 
+# 导入日志模块
+from ..logger import debug, info, warn, error, api, task, set_log_level, DEBUG, INFO
+
 
 class ModelInterface:
-    """模型接口 - 用于调用大模型"""
+    """模型接口 - 用于调用大模型（带重试机制）"""
+    
+    # 重试配置
+    MAX_RETRIES = 3
+    BASE_DELAY = 1.0
+    MAX_DELAY = 30.0
     
     def __init__(self, config: Dict):
         self.config = config
@@ -33,10 +50,28 @@ class ModelInterface:
                 api_key=self.config.get("api_key"),
                 base_url=self.config.get("base_url")
             )
+            debug(f"模型客户端初始化成功: {self.config.get('model')}")
         except ImportError:
-            UI.error("未安装 openai 库")
+            error("未安装 openai 库")
         except Exception as e:
-            UI.error(f"初始化客户端失败: {e}")
+            error(f"初始化客户端失败: {e}")
+    
+    def _should_retry(self, error: Exception) -> bool:
+        """判断是否应该重试"""
+        error_str = str(error).lower()
+        retry_keywords = [
+            'rate limit', '429', 'too many requests',
+            'timeout', 'timed out', 'connection',
+            'network', 'temporary', 'unavailable',
+            'overloaded', 'capacity'
+        ]
+        return any(kw in error_str for kw in retry_keywords)
+    
+    def _calculate_delay(self, attempt: int) -> float:
+        """计算重试延迟（指数退避 + 抖动）"""
+        delay = min(self.BASE_DELAY * (2 ** attempt), self.MAX_DELAY)
+        jitter = random.uniform(0.5, 1.5)
+        return delay * jitter
     
     def call(
         self,
@@ -45,7 +80,7 @@ class ModelInterface:
         tools: List[Dict] = None,
         stream: bool = False
     ) -> Tuple[str, List[Dict]]:
-        """调用模型"""
+        """调用模型（带重试机制）"""
         if not self.client:
             return "客户端未初始化", []
         
@@ -54,34 +89,53 @@ class ModelInterface:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        try:
-            kwargs = {
-                "model": self.config.get("model"),
-                "messages": messages,
-            }
-            if tools:
-                kwargs["tools"] = tools
-            
-            response = self.client.chat.completions.create(**kwargs)
-            
-            content = response.choices[0].message.content or ""
-            tool_calls = []
-            
-            if response.choices[0].message.tool_calls:
-                for tc in response.choices[0].message.tool_calls:
-                    tool_calls.append({
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    })
-            
-            return content, tool_calls
-            
-        except Exception as e:
-            return f"调用失败: {e}", []
+        last_error = None
+        
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                kwargs = {
+                    "model": self.config.get("model"),
+                    "messages": messages,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                
+                api(f"调用模型: {self.config.get('model')} (尝试 {attempt + 1})")
+                
+                response = self.client.chat.completions.create(**kwargs)
+                
+                content = response.choices[0].message.content or ""
+                tool_calls = []
+                
+                if response.choices[0].message.tool_calls:
+                    for tc in response.choices[0].message.tool_calls:
+                        tool_calls.append({
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        })
+                
+                if attempt > 0:
+                    info(f"重试成功 (第 {attempt + 1} 次尝试)")
+                
+                return content, tool_calls
+                
+            except Exception as e:
+                last_error = e
+                
+                if self._should_retry(e) and attempt < self.MAX_RETRIES:
+                    delay = self._calculate_delay(attempt)
+                    warn(f"API 调用失败，{delay:.1f}秒后重试 ({attempt + 1}/{self.MAX_RETRIES}): {e}")
+                    time.sleep(delay)
+                else:
+                    break
+        
+        error_msg = f"调用失败 (重试 {self.MAX_RETRIES} 次后): {last_error}"
+        error(error_msg)
+        return error_msg, []
     
     def _clean_model_output(self, content: str) -> str:
         """清理模型输出"""
@@ -160,7 +214,7 @@ class ModelInterface:
         tools: List[Dict] = None,
         stream: bool = True
     ) -> Tuple[str, List[Dict]]:
-        """异步调用模型"""
+        """异步调用模型（带重试机制）"""
         if not self.client:
             return "客户端未初始化", []
         
@@ -169,81 +223,100 @@ class ModelInterface:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        try:
-            kwargs = {
-                "model": self.config.get("model"),
-                "messages": messages,
-                "stream": stream
-            }
-            if tools:
-                kwargs["tools"] = tools
-            
-            response = self.client.chat.completions.create(**kwargs)
-            
-            if stream:
-                full_content = ""
-                tool_calls = []
+        last_error = None
+        
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                kwargs = {
+                    "model": self.config.get("model"),
+                    "messages": messages,
+                    "stream": stream
+                }
+                if tools:
+                    kwargs["tools"] = tools
                 
-                for chunk in response:
-                    if not chunk.choices:
-                        continue
+                api(f"异步调用模型: {self.config.get('model')} (尝试 {attempt + 1})")
+                
+                response = self.client.chat.completions.create(**kwargs)
+                
+                if stream:
+                    full_content = ""
+                    tool_calls = []
                     
-                    delta = chunk.choices[0].delta
+                    for chunk in response:
+                        if not chunk.choices:
+                            continue
+                        
+                        delta = chunk.choices[0].delta
+                        
+                        if delta.content:
+                            raw_content = delta.content
+                            clean_content = self._clean_model_output(raw_content)
+                            if clean_content:
+                                print(clean_content, end="", flush=True)
+                            full_content += raw_content
+                        
+                        if delta.tool_calls:
+                            for tc in delta.tool_calls:
+                                while len(tool_calls) <= tc.index:
+                                    tool_calls.append({
+                                        "id": f"tc_{tc.index}",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""}
+                                    })
+                                target = tool_calls[tc.index]
+                                if tc.id:
+                                    target["id"] = tc.id
+                                if tc.function.name:
+                                    target["function"]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    target["function"]["arguments"] += tc.function.arguments
                     
-                    if delta.content:
-                        raw_content = delta.content
-                        clean_content = self._clean_model_output(raw_content)
-                        if clean_content:
-                            print(clean_content, end="", flush=True)
-                        full_content += raw_content
+                    print()
                     
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            while len(tool_calls) <= tc.index:
-                                tool_calls.append({
-                                    "id": f"tc_{tc.index}",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""}
-                                })
-                            target = tool_calls[tc.index]
-                            if tc.id:
-                                target["id"] = tc.id
-                            if tc.function.name:
-                                target["function"]["name"] += tc.function.name
-                            if tc.function.arguments:
-                                target["function"]["arguments"] += tc.function.arguments
+                    full_content = self._clean_model_output(full_content)
+                    
+                    if not tool_calls and tools:
+                        tool_calls = self._parse_tool_calls_from_text(full_content)
+                    
+                    if attempt > 0:
+                        info(f"重试成功 (第 {attempt + 1} 次尝试)")
+                    
+                    return full_content, tool_calls
+                else:
+                    content = response.choices[0].message.content or ""
+                    content = self._clean_model_output(content)
+                    tool_calls = []
+                    
+                    if response.choices[0].message.tool_calls:
+                        for tc in response.choices[0].message.tool_calls:
+                            tool_calls.append({
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                    
+                    if not tool_calls and tools:
+                        tool_calls = self._parse_tool_calls_from_text(content)
+                    
+                    return content, tool_calls
+                    
+            except Exception as e:
+                last_error = e
                 
-                print()
-                
-                full_content = self._clean_model_output(full_content)
-                
-                if not tool_calls and tools:
-                    tool_calls = self._parse_tool_calls_from_text(full_content)
-                
-                return full_content, tool_calls
-            else:
-                content = response.choices[0].message.content or ""
-                content = self._clean_model_output(content)
-                tool_calls = []
-                
-                if response.choices[0].message.tool_calls:
-                    for tc in response.choices[0].message.tool_calls:
-                        tool_calls.append({
-                            "id": tc.id,
-                            "type": tc.type,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        })
-                
-                if not tool_calls and tools:
-                    tool_calls = self._parse_tool_calls_from_text(content)
-                
-                return content, tool_calls
-                
-        except Exception as e:
-            return f"调用失败: {e}", []
+                if self._should_retry(e) and attempt < self.MAX_RETRIES:
+                    delay = self._calculate_delay(attempt)
+                    warn(f"API 调用失败，{delay:.1f}秒后重试 ({attempt + 1}/{self.MAX_RETRIES}): {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    break
+        
+        error_msg = f"调用失败 (重试 {self.MAX_RETRIES} 次后): {last_error}"
+        error(error_msg)
+        return error_msg, []
     
     async def call_with_messages(
         self,
@@ -335,6 +408,116 @@ class ModelInterface:
                 
         except Exception as e:
             return f"调用失败: {e}", []
+    
+    async def call_with_messages(
+        self,
+        messages: List[Dict],
+        tools: List[Dict] = None,
+        stream: bool = True
+    ) -> Tuple[str, List[Dict]]:
+        """
+        使用完整消息历史调用模型（带重试机制，用于工具调用循环）
+        
+        Args:
+            messages: 完整的消息历史
+            tools: 工具定义
+            stream: 是否流式输出
+            
+        Returns:
+            (响应文本, 工具调用列表)
+        """
+        if not self.client:
+            return "客户端未初始化", []
+        
+        last_error = None
+        
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                kwargs = {
+                    "model": self.config.get("model"),
+                    "messages": messages,
+                    "stream": stream
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                
+                api(f"调用模型 (消息历史: {len(messages)}条) (尝试 {attempt + 1})")
+                
+                response = self.client.chat.completions.create(**kwargs)
+                
+                if stream:
+                    full_content = ""
+                    tool_calls = []
+                    
+                    for chunk in response:
+                        if not chunk.choices:
+                            continue
+                        
+                        delta = chunk.choices[0].delta
+                        
+                        if delta.content:
+                            raw_content = delta.content
+                            clean_content = self._clean_model_output(raw_content)
+                            if clean_content:
+                                print(clean_content, end="", flush=True)
+                            full_content += raw_content
+                        
+                        if delta.tool_calls:
+                            for tc in delta.tool_calls:
+                                while len(tool_calls) <= tc.index:
+                                    tool_calls.append({
+                                        "id": f"tc_{tc.index}",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""}
+                                    })
+                                target = tool_calls[tc.index]
+                                if tc.id:
+                                    target["id"] = tc.id
+                                if tc.function.name:
+                                    target["function"]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    target["function"]["arguments"] += tc.function.arguments
+                    
+                    if full_content:
+                        print()
+                    
+                    full_content = self._clean_model_output(full_content)
+                    
+                    if attempt > 0:
+                        info(f"重试成功 (第 {attempt + 1} 次尝试)")
+                    
+                    return full_content, tool_calls
+                else:
+                    content = response.choices[0].message.content or ""
+                    content = self._clean_model_output(content)
+                    tool_calls = []
+                    
+                    if response.choices[0].message.tool_calls:
+                        for tc in response.choices[0].message.tool_calls:
+                            tool_calls.append({
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                    
+                    return content, tool_calls
+                    
+            except Exception as e:
+                last_error = e
+                
+                if self._should_retry(e) and attempt < self.MAX_RETRIES:
+                    delay = self._calculate_delay(attempt)
+                    warn(f"API 调用失败，{delay:.1f}秒后重试 ({attempt + 1}/{self.MAX_RETRIES}): {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    break
+        
+        error_msg = f"调用失败 (重试 {self.MAX_RETRIES} 次后): {last_error}"
+        error(error_msg)
+        return error_msg, []
 
 
 class LeaderAI:
@@ -361,6 +544,17 @@ class LeaderAI:
         # 加载对话历史（修复：添加持久化上下文记忆）
         self.history_file = os.path.join(ai_dir, "leader_history.json")
         self.messages = self._load_history()
+        
+        # 任务恢复：检查是否有未完成的任务
+        self._check_pending_tasks()
+    
+    def _check_pending_tasks(self):
+        """检查未完成的任务（任务恢复功能）"""
+        in_progress = self.task_manager.get_in_progress_tasks()
+        pending = self.task_manager.get_pending_tasks()
+        
+        if in_progress or pending:
+            debug(f"发现 {len(in_progress)} 个进行中任务, {len(pending)} 个待处理任务")
     
     def _load_config(self, role: str) -> Optional[Dict]:
         """加载模型配置"""
@@ -384,7 +578,6 @@ class LeaderAI:
             except:
                 pass
         return ""
-    
     def is_ready(self) -> bool:
         """检查是否准备就绪"""
         return self.model is not None and self.worker_model is not None
@@ -444,6 +637,101 @@ class LeaderAI:
 {json.dumps(self.task_manager.get_statistics(), ensure_ascii=False, indent=2)}
 {tasks_summary}
 """
+    
+    def _summarize_old_messages(self, messages: List[Dict], keep_recent: int = 10) -> List[Dict]:
+        """
+        智能摘要旧消息（上下文窗口管理）
+        
+        保留策略：
+        - 保留系统消息
+        - 保留最近 N 条消息
+        - 将中间消息替换为摘要
+        
+        Args:
+            messages: 消息列表
+            keep_recent: 保留最近多少条消息
+            
+        Returns:
+            压缩后的消息列表
+        """
+        if len(messages) <= keep_recent + 2:
+            return messages
+        
+        # 分离系统消息
+        system_msg = None
+        other_messages = []
+        for m in messages:
+            if m.get("role") == "system":
+                system_msg = m
+            else:
+                other_messages.append(m)
+        
+        # 保留最近的消息
+        recent_messages = other_messages[-keep_recent:]
+        old_messages = other_messages[:-keep_recent]
+        
+        if not old_messages:
+            return messages
+        
+        # 生成摘要
+        summary_parts = []
+        for m in old_messages:
+            role = m.get("role", "unknown")
+            content = m.get("content", "")
+            
+            if role == "user":
+                summary_parts.append(f"用户: {content[:100]}...")
+            elif role == "assistant":
+                # 检查是否有工具调用
+                if m.get("tool_calls"):
+                    tool_names = [tc.get("function", {}).get("name", "") for tc in m["tool_calls"]]
+                    summary_parts.append(f"助手调用了工具: {', '.join(tool_names[:3])}")
+                elif content:
+                    summary_parts.append(f"助手: {content[:100]}...")
+            elif role == "tool":
+                summary_parts.append(f"工具结果: {str(content)[:50]}...")
+        
+        # 创建摘要消息
+        summary_text = "【历史摘要】\n" + "\n".join(summary_parts[-20:])  # 最多20条摘要
+        
+        summary_msg = {
+            "role": "user",
+            "content": f"[系统自动生成的历史摘要]\n{summary_text}\n\n请继续基于以上历史上下文工作。"
+        }
+        
+        # 组合结果
+        result = []
+        if system_msg:
+            result.append(system_msg)
+        result.append(summary_msg)
+        result.extend(recent_messages)
+        
+        debug(f"上下文压缩: {len(messages)} -> {len(result)} 条消息")
+        
+        return result
+    
+    def _manage_context(self, max_messages: int = 50) -> bool:
+        """
+        管理上下文窗口，防止溢出
+        
+        Args:
+            max_messages: 最大消息数量
+            
+        Returns:
+            是否进行了压缩
+        """
+        if len(self.messages) <= max_messages:
+            return False
+        
+        warn(f"上下文消息过多 ({len(self.messages)} 条)，正在进行智能压缩...")
+        
+        # 进行智能压缩
+        self.messages = self._summarize_old_messages(self.messages, keep_recent=15)
+        
+        # 保存压缩后的历史
+        self._save_history()
+        
+        return True
     
     async def start_session(self):
         """启动 Leader 会话"""
@@ -598,6 +886,16 @@ class LeaderAI:
                         # 分配任务给 Worker 执行
                         result = await self._assign_task_to_worker(task, instructions)
                 
+                elif name == "assign_tasks_parallel":
+                    # 并行分配多个任务
+                    task_ids = args.get("task_ids", [])
+                    max_concurrent = args.get("max_concurrent", 3)
+                    
+                    if not task_ids:
+                        result = "错误: 未提供任务ID列表"
+                    else:
+                        result = await self._assign_tasks_parallel(task_ids, max_concurrent)
+                
                 elif name == "list_tasks":
                     status_filter = args.get("status", "all")
                     tasks = self.task_manager.get_all_tasks()
@@ -696,6 +994,21 @@ class LeaderAI:
                             "instructions": {"type": "string", "description": "给 Worker 的额外执行指令"}
                         },
                         "required": ["task_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "assign_tasks_parallel",
+                    "description": "并行分配多个独立任务给 Worker AI 执行。用于无依赖关系的任务并发执行。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_ids": {"type": "array", "items": {"type": "string"}, "description": "要并行执行的任务ID列表"},
+                            "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 5, "description": "最大并发数（默认3）"}
+                        },
+                        "required": ["task_ids"]
                     }
                 }
             },
@@ -883,6 +1196,102 @@ class LeaderAI:
         else:
             self.task_manager.set_task_status(task["id"], "failed", error=result)
             return f"❌ 任务 {task['id']} 失败\n错误: {result[:500]}..." if len(result) > 500 else f"❌ 任务 {task['id']} 失败\n错误: {result}"
+    
+    async def _assign_tasks_parallel(self, task_ids: List[str], max_concurrent: int = 3) -> str:
+        """
+        并行分配多个任务给 Worker 执行
+        
+        Args:
+            task_ids: 任务ID列表
+            max_concurrent: 最大并发数
+            
+        Returns:
+            执行结果汇总
+        """
+        if not self.worker_model:
+            return "错误: Worker 模型未配置"
+        
+        # 获取所有待处理任务
+        tasks = []
+        invalid_ids = []
+        
+        for task_id in task_ids:
+            task = self.task_manager.get_task(task_id)
+            if task and task.get("status") == "pending":
+                tasks.append(task)
+            else:
+                invalid_ids.append(task_id)
+        
+        if invalid_ids:
+            warn(f"以下任务ID无效或非待处理状态: {', '.join(invalid_ids)}")
+        
+        if not tasks:
+            return "错误: 没有有效的待处理任务"
+        
+        info(f"开始并行执行 {len(tasks)} 个任务（最大并发: {max_concurrent}）")
+        
+        # 使用信号量控制并发
+        semaphore = asyncio.Semaphore(max_concurrent)
+        results = {}
+        
+        async def execute_with_semaphore(task: Dict):
+            async with semaphore:
+                task(f"Worker 开始: {task['title']}")
+                self.task_manager.set_task_status(task["id"], "in_progress")
+                
+                worker = WorkerAI(
+                    ai_dir=self.ai_dir,
+                    task=task,
+                    model_interface=self.worker_model,
+                    mcp_manager=self.mcp_manager,
+                    leader=self
+                )
+                
+                success, result = await worker.execute()
+                
+                if success:
+                    self.task_manager.set_task_status(task["id"], "completed", result=result)
+                    results[task["id"]] = f"✅ 完成"
+                else:
+                    self.task_manager.set_task_status(task["id"], "failed", error=result)
+                    results[task["id"]] = f"❌ 失败: {result[:100]}"
+        
+        # 并行执行
+        start_time = time.time()
+        await asyncio.gather(*[execute_with_semaphore(t) for t in tasks])
+        elapsed = time.time() - start_time
+        
+        # 显示进度
+        self._show_progress_bar(len(tasks), elapsed)
+        
+        # 汇总结果
+        completed = sum(1 for r in results.values() if "✅" in r)
+        failed = len(tasks) - completed
+        
+        summary = f"\n并行执行完成 (耗时: {elapsed:.1f}秒)\n"
+        summary += f"  成功: {completed}/{len(tasks)}\n"
+        summary += f"  失败: {failed}/{len(tasks)}\n"
+        
+        for task_id, result in results.items():
+            summary += f"  - {task_id}: {result}\n"
+        
+        return summary
+    
+    def _show_progress_bar(self, total: int, elapsed: float):
+        """显示进度条"""
+        stats = self.task_manager.get_statistics()
+        completed = stats.get("completed", 0)
+        failed = stats.get("failed", 0)
+        total_tasks = stats.get("total", 1)
+        
+        progress = completed / total_tasks if total_tasks > 0 else 0
+        bar_length = 30
+        filled = int(bar_length * progress)
+        
+        bar = f"{'█' * filled}{'░' * (bar_length - filled)}"
+        
+        print(f"\n{UI.CYAN}[进度]{UI.END} [{UI.GREEN}{bar}{UI.END}] {progress*100:.0f}% | "
+              f"完成: {completed} | 失败: {failed} | 耗时: {elapsed:.1f}s")
     
     async def assign_task_to_worker(self, task: Dict) -> Tuple[bool, str]:
         """分配任务给 Worker"""

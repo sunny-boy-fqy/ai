@@ -93,12 +93,17 @@ class UI:
 {cls.BOLD}用法:{cls.END}
   ai <命令> [参数]
 
+{cls.BOLD}全局参数:{cls.END}
+  --debug, -d         启用调试模式（详细日志输出）
+
 {cls.BOLD}Leader-Worker 模式:{cls.END}
   ai init              初始化当前目录(.ai文件夹)
   ai init --auto       使用全局配置自动初始化
   ai work              进入Leader-Worker工作模式(交互式)
   ai work --file <文件> 从文件执行任务(非交互式)
   ai work --task <任务> 直接执行任务(非交互式)
+  ai work --debug      启用调试模式
+  ai work --resume     恢复上次未完成的任务
 
 {cls.BOLD}对话:{cls.END}
   ai ask <问题>        即时问答
@@ -139,4 +144,12 @@ class UI:
   ai update            更新程序
   ai update <URL>      向github仓库更新配置(git@github.com:...)
   ai help              显示帮助
+
+{cls.BOLD}新增功能 (v0.2.0):{cls.END}
+  • API 调用自动重试（失败时最多重试3次）
+  • 智能上下文压缩（防止溢出）
+  • 任务恢复功能（ai work --resume）
+  • 并行任务执行（assign_tasks_parallel 工具）
+  • 进度可视化显示
+  • 调试模式（--debug）
 """)

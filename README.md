@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
@@ -50,6 +50,17 @@
 - **自动执行**: Worker AI 使用插件全自动执行
 - **进度监控**: 实时显示任务进度条
 - **错误处理**: 自动重试，智能恢复
+- **🆕 任务恢复**: `ai work --resume` 恢复上次未完成的任务
+- **🆕 并行执行**: 多个独立任务可并行执行
+- **🆕 智能上下文**: 自动压缩历史消息防止溢出
+
+### 🆕 v0.2.0 新增功能
+- **API 调用重试**: 失败时自动重试最多 3 次，指数退避
+- **调试模式**: `ai --debug` 或 `ai work --debug` 启用详细日志
+- **智能上下文压缩**: 超过 50 条消息时自动摘要压缩
+- **任务恢复**: 程序中断后可恢复执行
+- **并行任务**: Leader 可同时分配多个任务给 Worker
+- **进度可视化**: 彩色进度条显示执行进度
 
 ### 💻 命令行友好
 - **多行输入**: 支持代码块、续行符等多种多行输入方式
