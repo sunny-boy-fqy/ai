@@ -127,7 +127,86 @@ class PluginManager:
         except:
             pass
         
+        # 搜索 NPM registry（修复P3：添加远程搜索）
+        try:
+            remote_results = asyncio.run(cls._search_npm_registry(query_lower))
+            for pkg in remote_results:
+                # 去重
+                if not any(r.name == pkg["name"] for r in results):
+                    info = PluginInfo()
+                    info.name = pkg["name"]
+                    info.npm_package = pkg["name"]
+                    info.description = pkg.get("description", "")
+                    info.install_cmd = "npx"
+                    info.install_args = ["-y", pkg["name"]]
+                    info.capabilities = cls._detect_capabilities(pkg.get("description", ""))
+                    results.append(info)
+        except Exception:
+            pass
+        
         return results[:20]
+    
+    @classmethod
+    async def _search_npm_registry(cls, query: str) -> List[Dict]:
+        """从 NPM registry 搜索 MCP 相关包（修复P3）"""
+        if not query:
+            return []
+        
+        # 搜索 MCP 相关包
+        search_terms = [query, f"mcp-{query}", f"mcp-server-{query}", f"modelcontextprotocol-{query}"]
+        found = {}
+        
+        for term in search_terms[:3]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "npm", "search", term, "--json",
+                    "--searchlimit=10",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+                
+                if proc.returncode == 0:
+                    try:
+                        data = json.loads(stdout.decode())
+                        for pkg in data:
+                            name = pkg.get("name", "")
+                            # 过滤可能是 MCP 相关的包
+                            desc = pkg.get("description", "").lower()
+                            if "mcp" in desc or "model context protocol" in desc or "mcp-server" in name:
+                                if name not in found:
+                                    found[name] = pkg
+                    except:
+                        pass
+            except asyncio.TimeoutError:
+                break
+            except:
+                pass
+        
+        return list(found.values())[:10]
+    
+    @classmethod
+    def _detect_capabilities(cls, description: str) -> List[str]:
+        """从描述中检测能力类型"""
+        desc_lower = description.lower()
+        capabilities = []
+        
+        capability_keywords = {
+            "database": ["database", "db", "sql", "postgres", "mysql", "sqlite", "mongodb"],
+            "filesystem": ["file", "filesystem", "fs", "read", "write"],
+            "browser": ["browser", "puppeteer", "playwright", "chrome", "web"],
+            "search": ["search", "google", "brave", "duckduckgo"],
+            "github": ["github", "git"],
+            "memory": ["memory", "knowledge", "graph"],
+            "shell": ["shell", "bash", "command", "exec"],
+            "api": ["api", "http", "rest", "endpoint"],
+        }
+        
+        for cap, keywords in capability_keywords.items():
+            if any(kw in desc_lower for kw in keywords):
+                capabilities.append(cap)
+        
+        return capabilities if capabilities else ["general"]
     
     @classmethod
     async def install(cls, name: str) -> bool:

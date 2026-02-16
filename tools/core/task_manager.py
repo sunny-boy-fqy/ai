@@ -54,12 +54,31 @@ class TaskManager:
         }
     
     def _save_tasks(self):
-        """保存任务数据"""
+        """保存任务数据（修复P2：使用原子写入）"""
         self.tasks_data["updated_at"] = datetime.now().isoformat()
         self._update_statistics()
         
-        with open(self.tasks_file, 'w', encoding='utf-8') as f:
-            json.dump(self.tasks_data, f, ensure_ascii=False, indent=2)
+        # 修复P2：原子写入（先写临时文件，再重命名）
+        import tempfile
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(self.tasks_file),
+            prefix=".tasks_",
+            suffix=".json.tmp"
+        )
+        
+        try:
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                json.dump(self.tasks_data, f, ensure_ascii=False, indent=2)
+            
+            # 原子重命名（覆盖旧文件）
+            os.replace(temp_path, self.tasks_file)
+        except Exception as e:
+            # 如果失败，清理临时文件
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+            raise e
     
     def _update_statistics(self):
         """更新统计数据"""

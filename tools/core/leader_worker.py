@@ -357,6 +357,10 @@ class LeaderAI:
         # 读取指南
         self.leader_guide = self._load_guide("README_for_leader.md")
         self.worker_guide = self._load_guide("README_for_worker.md")
+        
+        # 加载对话历史（修复：添加持久化上下文记忆）
+        self.history_file = os.path.join(ai_dir, "leader_history.json")
+        self.messages = self._load_history()
     
     def _load_config(self, role: str) -> Optional[Dict]:
         """加载模型配置"""
@@ -384,6 +388,62 @@ class LeaderAI:
     def is_ready(self) -> bool:
         """检查是否准备就绪"""
         return self.model is not None and self.worker_model is not None
+    
+    def _load_history(self) -> List[Dict]:
+        """加载对话历史（修复P0：添加历史加载）"""
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        
+        # 初始化为包含系统提示的列表
+        return [{"role": "system", "content": self._build_system_prompt()}]
+    
+    def _save_history(self):
+        """保存对话历史（修复P0：添加历史保存）"""
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.messages, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            UI.warn(f"保存对话历史失败: {e}")
+    
+    def _build_system_prompt(self) -> str:
+        """构建系统提示"""
+        # 获取任务列表
+        tasks = self.task_manager.get_all_tasks()
+        tasks_summary = ""
+        if tasks:
+            tasks_summary = "\n当前任务列表:\n"
+            for t in tasks[:10]:  # 只显示前10个
+                status_icon = {"pending": "○", "in_progress": "◐", "completed": "●", "failed": "✗"}.get(t.get("status"), "○")
+                tasks_summary += f"  {status_icon} {t.get('id')}: {t.get('title')}\n"
+        
+        return f"""你是 Leader AI，负责任务规划和协调。
+
+{self.leader_guide}
+
+当前项目目录: {self.root_dir}
+
+## 🚨 核心工作流程（必须严格遵守）
+
+1. **接收需求** → 分析用户需求
+2. **创建任务** → 使用 `create_task` 工具创建任务
+3. **分配任务** → 使用 `assign_task` 工具分配给 Worker AI
+4. **等待完成** → Worker 执行完毕后检查结果
+5. **继续或汇报** → 分配下一个任务或向用户汇报
+
+## ⚠️ 重要规则
+
+- **禁止直接使用 MCP 工具执行代码编写任务**（如 write_file）
+- 所有执行类任务必须通过 `assign_task` 分配给 Worker AI
+- 你只负责：规划、创建任务、分配任务、监控进度、汇报结果
+
+当前任务状态:
+{json.dumps(self.task_manager.get_statistics(), ensure_ascii=False, indent=2)}
+{tasks_summary}
+"""
     
     async def start_session(self):
         """启动 Leader 会话"""
@@ -429,6 +489,11 @@ class LeaderAI:
                 
                 if user_input.lower() == "clear":
                     self.task_manager.clear_completed_tasks()
+                    # 同时清空对话历史
+                    system_prompt = self._build_system_prompt()
+                    self.messages = [{"role": "system", "content": system_prompt}]
+                    self._save_history()
+                    UI.success("已清空任务和对话历史")
                     continue
                 
                 # 处理用户输入
@@ -439,55 +504,49 @@ class LeaderAI:
                 break
     
     async def process_user_input(self, user_input: str):
-        """处理用户输入"""
+        """处理用户输入（修复P0：使用持久化的上下文记忆）"""
         # 获取 MCP 工具定义
         tools = await self.mcp_manager.get_tools()
         
         # 添加进化工具
         tools.extend(self._get_evolution_tools())
         
-        # 构建系统提示
-        system_prompt = f"""你是 Leader AI，负责任务规划和协调。
-
-{self.leader_guide}
-
-当前项目目录: {self.root_dir}
-
-你的职责：
-1. 分析用户需求，拆解为可执行的子任务
-2. 创建和更新 tasks.json
-3. 分配任务给 Worker AI 执行
-4. 监控任务进度
-5. 当无法完成任务时，向用户请求帮助
-
-当前任务状态:
-{json.dumps(self.task_manager.get_statistics(), ensure_ascii=False, indent=2)}
-
-你可以使用 MCP 工具来执行文件操作等任务。
-"""
+        # 更新系统提示（任务状态可能已变化）
+        updated_system_prompt = self._build_system_prompt()
         
-        # 调用模型
+        # 更新self.messages的第一条系统消息
+        if self.messages and self.messages[0]["role"] == "system":
+            self.messages[0]["content"] = updated_system_prompt
+        else:
+            self.messages.insert(0, {"role": "system", "content": updated_system_prompt})
+        
+        # 添加用户消息
+        self.messages.append({"role": "user", "content": user_input})
+        
+        # 调用模型（使用call_with_messages以使用完整历史）
         print(f"\n{UI.BLUE}[Leader]{UI.END} ", end="", flush=True)
-        response, tool_calls = await self.model.call_async(user_input, system_prompt, tools)
+        response, tool_calls = await self.model.call_with_messages(self.messages, tools, stream=True)
+        
+        # 如果有响应内容，添加到历史
+        if response:
+            self.messages.append({"role": "assistant", "content": response})
         
         # 处理工具调用循环
         if tool_calls:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input}
-            ]
-            await self._handle_tool_calls_loop(tool_calls, messages, tools)
+            await self._handle_tool_calls_loop(tool_calls, tools)
+        
+        # 保存历史
+        self._save_history()
         
         # 显示任务状态
         self.task_manager.show_progress()
     
-    async def _handle_tool_calls_loop(self, tool_calls: List[Dict], messages: List[Dict], tools: List[Dict]):
+    async def _handle_tool_calls_loop(self, tool_calls: List[Dict], tools: List[Dict]):
         """
-        处理工具调用循环
+        处理工具调用循环（修复P0：直接使用self.messages）
         
         Args:
             tool_calls: 工具调用列表
-            messages: 消息历史
             tools: 工具定义
         """
         max_iterations = 20
@@ -496,8 +555,8 @@ class LeaderAI:
         while tool_calls and iteration < max_iterations:
             iteration += 1
             
-            # 添加助手响应
-            messages.append({
+            # 添加助手响应（工具调用）
+            self.messages.append({
                 "role": "assistant",
                 "content": None,
                 "tool_calls": tool_calls
@@ -513,10 +572,61 @@ class LeaderAI:
                 
                 UI.info(f"调用: {name}")
                 
-                # MCP 工具
-                if "__" in name:
-                    result = await self.mcp_manager.call(name, args)
-                # 进化工具
+                # ===== 任务管理工具 =====
+                if name == "create_task":
+                    task = self.task_manager.create_task(
+                        title=args.get("title", "未命名任务"),
+                        description=args.get("description", ""),
+                        task_type=args.get("type", "code"),
+                        priority=args.get("priority", 3),
+                        files_to_modify=args.get("files_to_modify", []),
+                        acceptance_criteria=args.get("acceptance_criteria", [])
+                    )
+                    result = f"任务已创建: {task['id']}\n标题: {task['title']}\n请使用 assign_task 工具将此任务分配给 Worker AI 执行。"
+                    UI.success(f"任务已创建: {task['id']}")
+                
+                elif name == "assign_task":
+                    task_id = args.get("task_id")
+                    instructions = args.get("instructions", "")
+                    
+                    task = self.task_manager.get_task(task_id)
+                    if not task:
+                        result = f"错误: 未找到任务 {task_id}"
+                    elif task.get("status") != "pending":
+                        result = f"错误: 任务 {task_id} 状态为 {task.get('status')}，不是待处理状态"
+                    else:
+                        # 分配任务给 Worker 执行
+                        result = await self._assign_task_to_worker(task, instructions)
+                
+                elif name == "list_tasks":
+                    status_filter = args.get("status", "all")
+                    tasks = self.task_manager.get_all_tasks()
+                    
+                    if status_filter != "all":
+                        tasks = [t for t in tasks if t.get("status") == status_filter]
+                    
+                    if not tasks:
+                        result = f"没有{status_filter if status_filter != 'all' else ''}任务"
+                    else:
+                        lines = [f"任务列表 ({len(tasks)}个):\n"]
+                        for t in tasks:
+                            status_icon = {"pending": "○", "in_progress": "◐", "completed": "●", "failed": "✗"}.get(t.get("status"), "○")
+                            lines.append(f"  {status_icon} {t['id']}: {t['title']} [{t.get('status', 'unknown')}]")
+                        result = "\n".join(lines)
+                
+                elif name == "get_task_result":
+                    task_id = args.get("task_id")
+                    task = self.task_manager.get_task(task_id)
+                    if not task:
+                        result = f"错误: 未找到任务 {task_id}"
+                    else:
+                        result = f"任务: {task['title']}\n状态: {task.get('status')}\n"
+                        if task.get("result_summary"):
+                            result += f"结果: {task['result_summary']}\n"
+                        if task.get("error_log"):
+                            result += f"错误: {task['error_log']}\n"
+                
+                # ===== 插件管理工具 =====
                 elif name == "search_plugin":
                     results = PluginManager.search(args.get("query", ""))
                     result = self._format_search_results(results)
@@ -529,11 +639,15 @@ class LeaderAI:
                     result = "安装成功" if success else "安装失败"
                 elif name == "analyze_gap":
                     result = "分析完成"
+                
+                # ===== MCP 工具 =====
+                elif "__" in name:
+                    result = await self.mcp_manager.call(name, args)
                 else:
                     result = f"未知工具: {name}"
                 
                 # 添加工具结果
-                messages.append({
+                self.messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
                     "name": name,
@@ -542,14 +656,77 @@ class LeaderAI:
             
             # 继续对话
             print(f"{UI.CYAN}[继续]{UI.END} ", end="", flush=True)
-            response, tool_calls = await self.model.call_with_messages(messages, tools, stream=True)
+            response, tool_calls = await self.model.call_with_messages(self.messages, tools, stream=True)
             
             if response:
-                messages.append({"role": "assistant", "content": response})
+                self.messages.append({"role": "assistant", "content": response})
     
     def _get_evolution_tools(self) -> List[Dict]:
         """获取进化工具定义"""
         return [
+            # ===== 任务管理工具（Leader 专用）=====
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_task",
+                    "description": "创建一个新任务。Leader 必须先用此工具创建任务，再分配给 Worker。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "任务标题（简洁）"},
+                            "description": {"type": "string", "description": "任务详细描述"},
+                            "type": {"type": "string", "enum": ["code", "doc", "config", "test", "review", "refactor", "fix"], "description": "任务类型"},
+                            "priority": {"type": "integer", "minimum": 1, "maximum": 5, "description": "优先级（1最高，5最低）"},
+                            "files_to_modify": {"type": "array", "items": {"type": "string"}, "description": "需要修改的文件路径列表"},
+                            "acceptance_criteria": {"type": "array", "items": {"type": "string"}, "description": "验收标准"}
+                        },
+                        "required": ["title", "description"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "assign_task",
+                    "description": "将任务分配给 Worker AI 执行。Leader 必须在创建任务后调用此工具。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type": "string", "description": "要分配的任务ID"},
+                            "instructions": {"type": "string", "description": "给 Worker 的额外执行指令"}
+                        },
+                        "required": ["task_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_tasks",
+                    "description": "列出所有任务及其状态",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string", "enum": ["all", "pending", "in_progress", "completed", "failed"], "description": "筛选状态"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_task_result",
+                    "description": "获取已完成任务的详细结果",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type": "string", "description": "任务ID"}
+                        },
+                        "required": ["task_id"]
+                    }
+                }
+            },
+            # ===== 插件管理工具 =====
             {
                 "type": "function",
                 "function": {
@@ -665,6 +842,47 @@ class LeaderAI:
             }]
         
         return tasks
+    
+    async def _assign_task_to_worker(self, task: Dict, instructions: str = "") -> str:
+        """
+        分配任务给 Worker（内部方法，返回字符串结果）
+        
+        Args:
+            task: 任务字典
+            instructions: 额外指令
+            
+        Returns:
+            执行结果字符串
+        """
+        if not self.worker_model:
+            return "错误: Worker 模型未配置"
+        
+        # 设置任务状态为进行中
+        self.task_manager.set_task_status(task["id"], "in_progress")
+        
+        # 如果有额外指令，添加到任务描述中
+        if instructions:
+            task = task.copy()
+            task["description"] = f"{task.get('description', '')}\n\n额外指令: {instructions}"
+        
+        # 创建 Worker 实例并执行
+        worker = WorkerAI(
+            ai_dir=self.ai_dir,
+            task=task,
+            model_interface=self.worker_model,
+            mcp_manager=self.mcp_manager,
+            leader=self
+        )
+        
+        UI.section(f"Worker 执行任务: {task['title']}")
+        success, result = await worker.execute()
+        
+        if success:
+            self.task_manager.set_task_status(task["id"], "completed", result=result)
+            return f"✅ 任务 {task['id']} 完成\n结果: {result[:500]}..." if len(result) > 500 else f"✅ 任务 {task['id']} 完成\n结果: {result}"
+        else:
+            self.task_manager.set_task_status(task["id"], "failed", error=result)
+            return f"❌ 任务 {task['id']} 失败\n错误: {result[:500]}..." if len(result) > 500 else f"❌ 任务 {task['id']} 失败\n错误: {result}"
     
     async def assign_task_to_worker(self, task: Dict) -> Tuple[bool, str]:
         """分配任务给 Worker"""
@@ -789,12 +1007,21 @@ class WorkerAI:
             return False, f"执行异常: {e}\n{traceback.format_exc()}"
     
     async def _execution_loop(self, messages: List[Dict]) -> Tuple[bool, str]:
-        """执行循环"""
+        """执行循环（修复P1：添加上下文窗口管理）"""
         max_iterations = 20
         iteration = 0
+        max_message_count = 50  # 最大消息数（修复P1：防止上下文溢出）
         
         while iteration < max_iterations:
             iteration += 1
+            
+            # 修复P1：裁剪消息历史（保留系统提示 + 最近的消息）
+            if len(messages) > max_message_count:
+                # 保留system消息（第一条）+ 最近的消息
+                system_msg = messages[0] if messages[0]["role"] == "system" else None
+                recent_messages = messages[-(max_message_count-1):]
+                messages = ([system_msg] if system_msg else []) + recent_messages
+                UI.warn(f"消息历史已裁剪至 {len(messages)} 条以防止溢出")
             
             # 使用完整的消息历史调用模型
             response, tool_calls = await self.model.call_with_messages(messages, self.tools, stream=True)
