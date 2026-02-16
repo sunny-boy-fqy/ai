@@ -192,11 +192,27 @@ class ModelInterface:
         return error_msg, []
     
     def _clean_model_output(self, content: str) -> str:
-        """清理模型输出"""
+        """清理模型输出（过滤思考内容，保留工具调用）"""
         if not content:
             return content
         
-        patterns = [
+        cleaned = content
+        
+        # 过滤模型的思考内容（各种格式）
+        thinking_patterns = [
+            r'<think>.*?</think>',                    # <think>...</think>
+            r'<thinking>.*?</thinking>',              # <thinking>...</thinking>
+            r'\[think\].*?\[/think\]',                # [think]...[/think]
+            r'【思考】.*?【/思考】',                  # 【思考】...【/思考】
+            r'【想】.*?【/想】',                      # 【想】...【/想】
+            r'\|\|>.*?<\|\|',                        # ||>...<||
+        ]
+        
+        for pattern in thinking_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL)
+        
+        # 过滤特殊标记（保留工具调用相关的处理）
+        special_patterns = [
             r'<\|tool_calls_section_begin\|>',
             r'<\|tool_calls_section_end\|>',
             r'<\|tool_call_begin\|>',
@@ -204,16 +220,15 @@ class ModelInterface:
             r'<\|tool_call_argument_begin\|>',
             r'<\|tool_call_argument_end\|>',
             r'<\|tool_call_argument\|>',
-            r'<\|.*?\|>',
         ]
         
-        cleaned = content
-        for pattern in patterns:
+        for pattern in special_patterns:
             cleaned = re.sub(pattern, '', cleaned)
         
-        cleaned = re.sub(r'functions\.\w+:\d+\s*', '', cleaned)
-        cleaned = re.sub(r'\{\s*"[^"]+"\s*:\s*"[^"]*"[^}]*\}\s*', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        # 清理多余的空白（但保留换行以保持可读性）
+        cleaned = re.sub(r'[ \t]+', ' ', cleaned)  # 只压缩空格和制表符
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)  # 多个空行压缩为两个
+        cleaned = cleaned.strip()
         
         return cleaned
     
